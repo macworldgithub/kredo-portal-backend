@@ -50,6 +50,15 @@ class ResetPasswordDto {
   newPassword: string;
 }
 
+class VerifyPasswordResetCodeDto {
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  @Matches(/^\d{6}$/, { message: 'Verification code must be exactly 6 digits' })
+  code: string;
+}
+
 class UpdatePasswordDto {
   @IsString()
   @IsNotEmpty()
@@ -87,6 +96,12 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async forgotPassword(@Body() dto: ForgotPasswordDto) {
     return this.authService.requestPasswordReset(dto.email);
+  }
+
+  @Post('verify-reset-code')
+  @HttpCode(HttpStatus.OK)
+  async verifyResetCode(@Body() dto: VerifyPasswordResetCodeDto) {
+    return this.authService.verifyPasswordResetCode(dto.email, dto.code);
   }
 
   @Post('reset-password')

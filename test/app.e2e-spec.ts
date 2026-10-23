@@ -10,7 +10,7 @@ describe('Kredo portal backend (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken: string;
   let mongoServer: MongoMemoryServer;
-  let resetUrl: string | null = null;
+  let resetCode: string | null = null;
 
   beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
@@ -27,8 +27,8 @@ describe('Kredo portal backend (e2e)', () => {
       .overrideProvider(MailService)
       .useValue({
         assertConfigured: () => undefined,
-        sendPasswordResetLink: async (_email: string, url: string) => {
-          resetUrl = url;
+        sendPasswordResetCode: async (_email: string, code: string) => {
+          resetCode = code;
         },
       })
       .compile();
@@ -67,8 +67,13 @@ describe('Kredo portal backend (e2e)', () => {
       })
       .expect(201);
 
-    expect(signup.body.user.role).toBe('partner');
-    expect(signup.body.user.partnerCode).toBe('HAYES01');
+    expect(signup.body.message).toContain('Please sign in');
+    expect(signup.body.accessToken).toBeUndefined();
+
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email: 'new-user@hayes.example', password: 'New123' })
+      .expect(200);
 
     await request(app.getHttpServer())
       .post('/api/auth/signup')
@@ -91,13 +96,13 @@ describe('Kredo portal backend (e2e)', () => {
       .expect(400);
   });
 
-  it('requests and consumes a single-use password reset link', async () => {
+  it('sends a reset code, verifies it, and consumes a single-use reset token', async () => {
     await request(app.getHttpServer())
       .post('/api/auth/forgot-password')
       .send({ email: 'unknown@hayes.example' })
       .expect(200)
       .expect(({ body }) => {
-        expect(body.message).toContain('If an account exists');
+        expect(body.message).toContain('verification code');
       });
 
     await request(app.getHttpServer())
@@ -105,12 +110,34 @@ describe('Kredo portal backend (e2e)', () => {
       .send({ email: 'new-user@hayes.example' })
       .expect(200)
       .expect(({ body }) => {
-        expect(body.message).toContain('If an account exists');
+        expect(body.message).toContain('verification code');
+        expect(body.resetCode).toBeUndefined();
       });
 
-    expect(resetUrl).toBeTruthy();
-    const resetToken = new URL(resetUrl!).searchParams.get('token');
+    expect(resetCode).toMatch(/^\d{6}$/);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/verify-reset-code')
+      .send({ email: 'new-user@hayes.example', code: resetCode === '000000' ? '000001' : '000000' })
+      .expect(400);
+
+    const verification = await request(app.getHttpServer())
+      .post('/api/auth/verify-reset-code')
+      .send({ email: 'new-user@hayes.example', code: resetCode })
+      .expect(200);
+
+    const resetToken = verification.body.resetToken as string;
     expect(resetToken).toBeTruthy();
+
+    await request(app.getHttpServer())
+      .post('/api/auth/verify-reset-code')
+      .send({ email: 'new-user@hayes.example', code: resetCode })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/reset-password')
+      .send({ token: 'unverified-token', newPassword: 'Reset1' })
+      .expect(400);
 
     await request(app.getHttpServer())
       .post('/api/auth/reset-password')

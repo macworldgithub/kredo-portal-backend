@@ -9,7 +9,7 @@ import { JwtService } from '@nestjs/jwt';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import * as bcrypt from 'bcryptjs';
-import { createHash, randomBytes } from 'node:crypto';
+import { createHash, createHmac, randomBytes, randomInt, timingSafeEqual } from 'node:crypto';
 import { ConfigService } from '@nestjs/config';
 import { User, UserRole } from './user.schema.js';
 import { Partner } from '../schemas/partner.schema.js';
@@ -90,7 +90,7 @@ export class AuthService {
       isActive: true,
     });
 
-    return this.login(email, input.password);
+    return { message: 'Account created. Please sign in.' };
   }
 
   async requestPasswordReset(emailInput: string): Promise<{ message: string }> {
@@ -98,27 +98,79 @@ export class AuthService {
     const email = emailInput.toLowerCase();
     const user = await this.userModel.findOne({ email, isActive: true }).exec();
     const response = {
-      message: 'If an account exists for this email, a password reset link has been sent.',
+      message: 'If an account exists for this email, a verification code has been sent.',
     };
     if (!user) return response;
 
-    const rawToken = randomBytes(32).toString('hex');
-    user.passwordResetTokenHash = this.hashResetToken(rawToken);
-    user.passwordResetExpiresAt = new Date(Date.now() + 30 * 60 * 1000);
+    const code = randomInt(0, 1_000_000).toString().padStart(6, '0');
+    user.passwordResetCodeHash = this.hashResetCode(code);
+    user.passwordResetCodeExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
+    user.passwordResetCodeAttempts = 0;
+    user.passwordResetTokenHash = null;
+    user.passwordResetExpiresAt = null;
     await user.save();
 
-    const frontendUrl = this.config.get<string>('FRONTEND_URL') || 'http://localhost:3000';
-    const resetUrl = new URL('/reset-password', frontendUrl);
-    resetUrl.searchParams.set('token', rawToken);
     try {
-      await this.mailService.sendPasswordResetLink(email, resetUrl.toString());
+      await this.mailService.sendPasswordResetCode(email, code);
     } catch (error) {
-      user.passwordResetTokenHash = null;
-      user.passwordResetExpiresAt = null;
+      user.passwordResetCodeHash = null;
+      user.passwordResetCodeExpiresAt = null;
+      user.passwordResetCodeAttempts = 0;
       await user.save();
       throw error;
     }
     return response;
+  }
+
+  async verifyPasswordResetCode(emailInput: string, code: string): Promise<{ resetToken: string }> {
+    const user = await this.userModel.findOne({
+      email: emailInput.toLowerCase(),
+      isActive: true,
+      passwordResetCodeHash: { $ne: null },
+      passwordResetCodeExpiresAt: { $gt: new Date() },
+      passwordResetCodeAttempts: { $lt: 5 },
+    }).exec();
+    if (!user?.passwordResetCodeHash) {
+      throw new BadRequestException('Verification code is invalid or has expired');
+    }
+
+    const expectedHash = Buffer.from(user.passwordResetCodeHash, 'hex');
+    const providedHash = Buffer.from(this.hashResetCode(code), 'hex');
+    if (expectedHash.length !== providedHash.length || !timingSafeEqual(expectedHash, providedHash)) {
+      await this.userModel.updateOne(
+        {
+          _id: user._id,
+          passwordResetCodeHash: user.passwordResetCodeHash,
+          passwordResetCodeExpiresAt: { $gt: new Date() },
+          passwordResetCodeAttempts: { $lt: 5 },
+        },
+        { $inc: { passwordResetCodeAttempts: 1 } },
+      ).exec();
+      throw new BadRequestException('Verification code is invalid or has expired');
+    }
+
+    const resetToken = randomBytes(32).toString('hex');
+    const consumed = await this.userModel.updateOne(
+      {
+        _id: user._id,
+        passwordResetCodeHash: user.passwordResetCodeHash,
+        passwordResetCodeExpiresAt: { $gt: new Date() },
+        passwordResetCodeAttempts: { $lt: 5 },
+      },
+      {
+        $set: {
+          passwordResetCodeHash: null,
+          passwordResetCodeExpiresAt: null,
+          passwordResetCodeAttempts: 0,
+          passwordResetTokenHash: this.hashResetToken(resetToken),
+          passwordResetExpiresAt: new Date(Date.now() + 10 * 60 * 1000),
+        },
+      },
+    ).exec();
+    if (consumed.modifiedCount !== 1) {
+      throw new BadRequestException('Verification code is invalid or has expired');
+    }
+    return { resetToken };
   }
 
   async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
@@ -134,6 +186,9 @@ export class AuthService {
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     user.passwordResetTokenHash = null;
     user.passwordResetExpiresAt = null;
+    user.passwordResetCodeHash = null;
+    user.passwordResetCodeExpiresAt = null;
+    user.passwordResetCodeAttempts = 0;
     await user.save();
     return { message: 'Password has been reset. You can now sign in.' };
   }
@@ -151,12 +206,20 @@ export class AuthService {
     user.passwordHash = await bcrypt.hash(newPassword, 10);
     user.passwordResetTokenHash = null;
     user.passwordResetExpiresAt = null;
+    user.passwordResetCodeHash = null;
+    user.passwordResetCodeExpiresAt = null;
+    user.passwordResetCodeAttempts = 0;
     await user.save();
     return { message: 'Password updated successfully' };
   }
 
   private hashResetToken(token: string): string {
     return createHash('sha256').update(token).digest('hex');
+  }
+
+  private hashResetCode(code: string): string {
+    const secret = this.config.get<string>('JWT_SECRET') || 'dev-secret-kredo-portal';
+    return createHmac('sha256', secret).update(code).digest('hex');
   }
 
   async createSeedUser(input: {

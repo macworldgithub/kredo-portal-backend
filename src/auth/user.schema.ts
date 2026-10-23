@@ -33,6 +33,15 @@ export class User {
 
   @Prop({ type: Date, default: null })
   passwordResetExpiresAt?: Date | null;
+
+  @Prop({ type: String, default: null })
+  passwordResetCodeHash?: string | null;
+
+  @Prop({ type: Date, default: null })
+  passwordResetCodeExpiresAt?: Date | null;
+
+  @Prop({ type: Number, default: 0 })
+  passwordResetCodeAttempts: number;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

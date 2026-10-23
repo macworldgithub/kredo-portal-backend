@@ -33,16 +33,19 @@ $ npm install
 
 Copy `.env.example` to `.env` and set `MONGODB_URI` and a long random `JWT_SECRET`.
 For password recovery, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
-`SMTP_PASSWORD`, `EMAIL_FROM`, and `FRONTEND_URL`. The reset link expires after
-30 minutes and can only be used once. SMTP credentials belong only in the backend
+`SMTP_PASSWORD`, and `FRONTEND_URL`. `EMAIL_FROM` is optional; when omitted, the
+SMTP username is used as the sender address. For Gmail, use `smtp.gmail.com`,
+port `587`, your Gmail address, and a Google app password. The six-digit reset
+code expires after 10 minutes. SMTP credentials belong only in the backend
 environment and must never be exposed in the frontend.
 
 The authentication API includes:
 
-- `POST /api/auth/signup` — creates a partner account with an active partner code.
+- `POST /api/auth/signup` — creates a partner account with an active partner code; the user must sign in afterward.
 - `POST /api/auth/login` — returns a JWT.
-- `POST /api/auth/forgot-password` — emails a single-use reset link.
-- `POST /api/auth/reset-password` — consumes a reset token and sets a new password.
+- `POST /api/auth/forgot-password` — emails a six-digit code that expires after 10 minutes.
+- `POST /api/auth/verify-reset-code` — verifies the emailed code and returns a short-lived, single-use reset token.
+- `POST /api/auth/reset-password` — consumes the verified reset token and sets a new password.
 - `POST /api/auth/update-password` — changes the signed-in user's password; requires a bearer token.
 
 New passwords must be exactly six letters and/or digits (no spaces or symbols) for

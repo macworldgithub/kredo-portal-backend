@@ -7,14 +7,18 @@ export class MailService {
   constructor(private readonly config: ConfigService) {}
 
   assertConfigured(): void {
-    if (!this.config.get<string>('SMTP_HOST') || !this.config.get<string>('EMAIL_FROM')) {
+    const host = this.config.get<string>('SMTP_HOST')?.trim();
+    const from = this.config.get<string>('EMAIL_FROM')?.trim()
+      || this.config.get<string>('SMTP_USER')?.trim();
+    if (!host || !from) {
       throw new ServiceUnavailableException('Password recovery email is not configured');
     }
   }
 
-  async sendPasswordResetLink(email: string, resetUrl: string): Promise<void> {
-    const host = this.config.get<string>('SMTP_HOST');
-    const from = this.config.get<string>('EMAIL_FROM');
+  async sendPasswordResetCode(email: string, code: string): Promise<void> {
+    const host = this.config.get<string>('SMTP_HOST')?.trim();
+    const from = this.config.get<string>('EMAIL_FROM')?.trim()
+      || this.config.get<string>('SMTP_USER')?.trim();
     this.assertConfigured();
     if (!host || !from) throw new ServiceUnavailableException('Password recovery email is not configured');
 
@@ -28,14 +32,12 @@ export class MailService {
       ...(user && pass ? { auth: { user, pass } } : {}),
     });
 
-    const escapedResetUrl = resetUrl.replaceAll('&', '&amp;').replaceAll('"', '&quot;')
-      .replaceAll('<', '&lt;').replaceAll('>', '&gt;');
     await transporter.sendMail({
       from,
       to: email,
-      subject: 'Reset your Kredo password',
-      text: `Use this one-time link to reset your Kredo password. It expires in 30 minutes:\n\n${resetUrl}\n\nIf you did not request this, you can ignore this email.`,
-      html: `<p>Use this one-time link to reset your Kredo password. It expires in 30 minutes:</p><p><a href="${escapedResetUrl}">Reset password</a></p><p>If you did not request this, you can ignore this email.</p>`,
+      subject: 'Your Kredo password reset code',
+      text: `Your Kredo password reset verification code is ${code}. It expires in 10 minutes. If you did not request this, you can ignore this email.`,
+      html: `<p>Your Kredo password reset verification code is:</p><p style="font-size:28px;font-weight:bold;letter-spacing:6px">${code}</p><p>This code expires in 10 minutes. If you did not request this, you can ignore this email.</p>`,
     });
   }
 }
