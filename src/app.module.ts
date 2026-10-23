@@ -17,10 +17,16 @@ import { User, UserSchema } from './auth/user.schema.js';
     MongooseModule.forRootAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        uri: config.get<string>('MONGODB_URI') || 'mongodb://127.0.0.1:27017/kredo-portal',
-        autoIndex: true,
-      }),
+      useFactory: (config: ConfigService) => {
+        const uri = config.get<string>('MONGODB_URI');
+        if (process.env.NODE_ENV === 'production' && !uri) {
+          throw new Error('MONGODB_URI must be configured in production.');
+        }
+        return {
+          uri: uri || 'mongodb://127.0.0.1:27017/kredo-portal',
+          autoIndex: true,
+        };
+      },
     }),
     MongooseModule.forFeature([
       { name: Partner.name, schema: PartnerSchema },

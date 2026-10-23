@@ -207,25 +207,33 @@ export class DatabaseSeederService implements OnModuleInit {
   }
 
   private async seedUsers() {
-    const adminEmail = process.env.MASTER_EMAIL || 'admin@kredo.local';
-    const partnerEmail = process.env.PARTNER_EMAIL || 'partner@kredo.local';
+    const isProduction = process.env.NODE_ENV === 'production';
+    const adminEmail = process.env.MASTER_EMAIL || (isProduction ? '' : 'admin@kredo.local');
+    const adminPassword = process.env.MASTER_PASSWORD || (isProduction ? '' : 'ChangeMe123!');
+    if (!adminEmail || !adminPassword) {
+      throw new Error('Set MASTER_EMAIL and MASTER_PASSWORD in the production environment.');
+    }
 
     await this.authService.createSeedUser({
       email: adminEmail,
-      password: process.env.MASTER_PASSWORD || 'ChangeMe123!',
+      password: adminPassword,
       name: 'Kredo Master',
       role: 'master',
     });
 
-    await this.authService.createSeedUser({
-      email: partnerEmail,
-      password: process.env.PARTNER_PASSWORD || 'ChangeMe123!',
-      name: 'Hayes Partners',
-      role: 'partner',
-      partnerCode: 'HAYES01',
-    });
+    const partnerEmail = process.env.PARTNER_EMAIL || (isProduction ? '' : 'partner@kredo.local');
+    const partnerPassword = process.env.PARTNER_PASSWORD || (isProduction ? '' : 'ChangeMe123!');
+    if (partnerEmail && partnerPassword) {
+      await this.authService.createSeedUser({
+        email: partnerEmail,
+        password: partnerPassword,
+        name: 'Hayes Partners',
+        role: 'partner',
+        partnerCode: 'HAYES01',
+      });
+    }
 
-    this.logger.log('Seeded default auth users');
+    this.logger.log(isProduction ? 'Seeded configured master account' : 'Seeded default auth users');
   }
 
   private async seedPartners() {

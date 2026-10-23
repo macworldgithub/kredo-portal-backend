@@ -21,10 +21,16 @@ import { Partner, PartnerSchema } from '../schemas/partner.schema.js';
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.get<string>('JWT_SECRET') || 'dev-secret-kredo-portal',
-        signOptions: { expiresIn: (config.get<string>('JWT_EXPIRES_IN') || '7d') as any },
-      }),
+      useFactory: (config: ConfigService) => {
+        const secret = config.get<string>('JWT_SECRET');
+        if (process.env.NODE_ENV === 'production' && !secret) {
+          throw new Error('JWT_SECRET must be configured in production.');
+        }
+        return {
+          secret: secret || 'dev-secret-kredo-portal',
+          signOptions: { expiresIn: (config.get<string>('JWT_EXPIRES_IN') || '7d') as any },
+        };
+      },
     }),
   ],
   controllers: [AuthController],

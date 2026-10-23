@@ -78,18 +78,37 @@ $ npm run test:e2e
 $ npm run test:cov
 ```
 
-## Deployment
+## Deploy on Vercel
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+Deploy this backend as a **separate Vercel project** with this directory as its
+project root. The `api/[...path].ts` serverless function hosts the Nest/Express
+application; public API routes retain the `/api` prefix. Use `npm run build` as
+the build command and leave the Output Directory unset.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+Create a MongoDB Atlas database and configure Atlas network access for the
+deployed backend. In the backend Vercel project's Production environment, set:
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+- `MONGODB_URI` — the Atlas connection string.
+- `JWT_SECRET` — a long, randomly generated secret.
+- `MASTER_EMAIL` and `MASTER_PASSWORD` — the production master login.
+- `FRONTEND_URL` — the frontend's deployed HTTPS origin, without a path.
+- `CORS_ORIGINS` — comma-separated allowed frontend origins. Add the production
+  origin and any Preview origins that should be allowed.
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, and `SMTP_PASSWORD` — mail provider
+  settings. For Gmail, use `smtp.gmail.com`, port `587`, a Gmail address, and a
+  Google app password. `EMAIL_FROM` is optional; if omitted, `SMTP_USER` is used.
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
+Vercel deployments do not read your local `.env`. Add values in Vercel's
+Environment Variables settings; never commit or paste secrets into source code.
+Do not use the sample local master credentials for production. A new production
+database seeds the configured master account and does not seed the local demo
+partner login by default. Existing database accounts are not overwritten.
+
+Deploy the frontend separately with `kredo-platform` as its project root. Set
+its `NEXT_PUBLIC_API_URL` to `https://<backend-domain>/api` in the frontend
+Vercel project and redeploy it. Verify that both frontend and backend are
+available over HTTPS, then test login, signup, CORS-protected API calls, and
+email-based password recovery.
 
 ## Observability
 

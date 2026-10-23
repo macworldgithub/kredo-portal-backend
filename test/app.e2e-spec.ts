@@ -20,6 +20,7 @@ describe('Kredo portal backend (e2e)', () => {
     process.env.MASTER_PASSWORD = 'ChangeMe123!';
     process.env.PARTNER_EMAIL = 'partner@kredo.local';
     process.env.PARTNER_PASSWORD = 'ChangeMe123!';
+    process.env.NODE_ENV = 'test';
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
