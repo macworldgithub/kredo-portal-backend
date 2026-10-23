@@ -1,14 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
+import { INestApplication, ValidationPipe } from '@nestjs/common';
 import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { AppModule } from './../src/app.module.js';
+import { MailService } from './../src/auth/mail.service.js';
 
 describe('Kredo portal backend (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken: string;
   let mongoServer: MongoMemoryServer;
+  let resetUrl: string | null = null;
 
   beforeAll(async () => {
     mongoServer = await MongoMemoryServer.create();
@@ -21,11 +23,24 @@ describe('Kredo portal backend (e2e)', () => {
 
     const moduleFixture: TestingModule = await Test.createTestingModule({
       imports: [AppModule],
-    }).compile();
+    })
+      .overrideProvider(MailService)
+      .useValue({
+        assertConfigured: () => undefined,
+        sendPasswordResetLink: async (_email: string, url: string) => {
+          resetUrl = url;
+        },
+      })
+      .compile();
 
     app = moduleFixture.createNestApplication();
     app.setGlobalPrefix('api');
     app.enableCors({ origin: true, credentials: true });
+    app.useGlobalPipes(new ValidationPipe({
+      transform: true,
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    }));
     await app.init();
 
     const loginResponse = await request(app.getHttpServer())
@@ -39,6 +54,89 @@ describe('Kredo portal backend (e2e)', () => {
   it('GET /api/portal/health', async () => {
     const res = await request(app.getHttpServer()).get('/api/portal/health').expect(200);
     expect(res.body.status).toBe('ok');
+  });
+
+  it('signs up partner accounts only with an active partner code', async () => {
+    const signup = await request(app.getHttpServer())
+      .post('/api/auth/signup')
+      .send({
+        name: 'New Partner User',
+        email: 'new-user@hayes.example',
+        password: 'New123',
+        partnerCode: 'hayes01',
+      })
+      .expect(201);
+
+    expect(signup.body.user.role).toBe('partner');
+    expect(signup.body.user.partnerCode).toBe('HAYES01');
+
+    await request(app.getHttpServer())
+      .post('/api/auth/signup')
+      .send({
+        name: 'Invalid Password',
+        email: 'invalid-password@hayes.example',
+        password: 'bad!xx',
+        partnerCode: 'HAYES01',
+      })
+      .expect(400);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/signup')
+      .send({
+        name: 'Unauthorized Admin',
+        email: 'no-partner@example.test',
+        password: 'NoCode1',
+        partnerCode: 'UNKNOWN',
+      })
+      .expect(400);
+  });
+
+  it('requests and consumes a single-use password reset link', async () => {
+    await request(app.getHttpServer())
+      .post('/api/auth/forgot-password')
+      .send({ email: 'unknown@hayes.example' })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.message).toContain('If an account exists');
+      });
+
+    await request(app.getHttpServer())
+      .post('/api/auth/forgot-password')
+      .send({ email: 'new-user@hayes.example' })
+      .expect(200)
+      .expect(({ body }) => {
+        expect(body.message).toContain('If an account exists');
+      });
+
+    expect(resetUrl).toBeTruthy();
+    const resetToken = new URL(resetUrl!).searchParams.get('token');
+    expect(resetToken).toBeTruthy();
+
+    await request(app.getHttpServer())
+      .post('/api/auth/reset-password')
+      .send({ token: resetToken, newPassword: 'Reset1' })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/reset-password')
+      .send({ token: resetToken, newPassword: 'Other2' })
+      .expect(400);
+
+    const login = await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email: 'new-user@hayes.example', password: 'Reset1' })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/update-password')
+      .set('Authorization', `Bearer ${login.body.accessToken}`)
+      .send({ currentPassword: 'Reset1', newPassword: 'Updat1' })
+      .expect(200);
+
+    await request(app.getHttpServer())
+      .post('/api/auth/login')
+      .send({ email: 'new-user@hayes.example', password: 'Updat1' })
+      .expect(200);
   });
 
   it('logs in and loads dashboard data for partner', async () => {
@@ -56,6 +154,17 @@ describe('Kredo portal backend (e2e)', () => {
     expect(res.body.partner.code).toBe('HAYES01');
     expect(Array.isArray(res.body.deals)).toBe(true);
     expect(res.body.stats).toHaveProperty('referredThisMonth');
+
+    const partnerDeals = await request(app.getHttpServer())
+      .get('/api/portal/deals')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+
+    expect(partnerDeals.body.every((deal: { name: string }) => deal.name !== 'Alloy Fleet Services')).toBe(true);
+    await request(app.getHttpServer())
+      .get('/api/portal/deals/KRD-2842')
+      .set('Authorization', `Bearer ${token}`)
+      .expect(404);
   });
 
   it('creates a direct referral and updates deal status', async () => {
@@ -92,6 +201,13 @@ describe('Kredo portal backend (e2e)', () => {
       .expect(200);
 
     expect(overviewRes.body.stats).toHaveProperty('activePartners');
+
+    const preferenceRes = await request(app.getHttpServer())
+      .patch('/api/portal/master/preferences')
+      .set('Authorization', `Bearer ${adminToken}`)
+      .send({ weeklyReportsEnabled: true })
+      .expect(200);
+    expect(preferenceRes.body.weeklyReportsEnabled).toBe(true);
 
     const createPartnerRes = await request(app.getHttpServer())
       .post('/api/portal/master/partners')

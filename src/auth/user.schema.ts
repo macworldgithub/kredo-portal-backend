@@ -24,6 +24,15 @@ export class User {
 
   @Prop({ default: true })
   isActive: boolean;
+
+  @Prop({ default: false })
+  weeklyReportsEnabled: boolean;
+
+  @Prop({ type: String, default: null })
+  passwordResetTokenHash?: string | null;
+
+  @Prop({ type: Date, default: null })
+  passwordResetExpiresAt?: Date | null;
 }
 
 export const UserSchema = SchemaFactory.createForClass(User);

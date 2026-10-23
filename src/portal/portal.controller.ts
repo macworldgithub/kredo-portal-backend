@@ -1,5 +1,5 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { IsArray, IsEmail, IsIn, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsBoolean, IsEmail, IsIn, IsOptional, IsString } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/role.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -111,6 +111,11 @@ class CreateApplicationDto {
   referralCode?: string;
 }
 
+class UpdateMasterPreferencesDto {
+  @IsBoolean()
+  weeklyReportsEnabled: boolean;
+}
+
 @Controller('portal')
 export class PortalController {
   constructor(private readonly portalService: PortalService) {}
@@ -138,32 +143,32 @@ export class PortalController {
 
   @Get('deals')
   @UseGuards(JwtAuthGuard)
-  async getDeals(@Query('search') search?: string, @Query('stage') stage?: string) {
-    return this.portalService.getDeals(search, stage);
+  async getDeals(@Req() req: any, @Query('search') search?: string, @Query('stage') stage?: string) {
+    return this.portalService.getDeals(req.user, search, stage);
   }
 
   @Get('deals/:id')
   @UseGuards(JwtAuthGuard)
-  async getDeal(@Param('id') id: string) {
-    return this.portalService.getDealById(id);
+  async getDeal(@Req() req: any, @Param('id') id: string) {
+    return this.portalService.getDealById(req.user, id);
   }
 
   @Patch('deals/:id/status')
   @UseGuards(JwtAuthGuard)
-  async updateDealStatus(@Param('id') id: string, @Body() dto: UpdateDealStatusDto) {
-    return this.portalService.updateDealStatus(id, dto.status as any);
+  async updateDealStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDealStatusDto) {
+    return this.portalService.updateDealStatus(req.user, id, dto.status as any);
   }
 
   @Post('deals/direct')
   @UseGuards(JwtAuthGuard)
-  async createDirectReferral(@Body() dto: CreateDirectReferralDto) {
-    return this.portalService.createDirectReferral(dto);
+  async createDirectReferral(@Req() req: any, @Body() dto: CreateDirectReferralDto) {
+    return this.portalService.createDirectReferral(req.user, dto);
   }
 
   @Get('commissions')
   @UseGuards(JwtAuthGuard)
-  async getCommissions() {
-    return this.portalService.getCommissions();
+  async getCommissions(@Req() req: any) {
+    return this.portalService.getCommissions(req.user);
   }
 
   @Get('settings')
@@ -209,6 +214,20 @@ export class PortalController {
   @Roles('master')
   async getMasterReports() {
     return this.portalService.getMasterReports();
+  }
+
+  @Get('master/preferences')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async getMasterPreferences(@Req() req: any) {
+    return this.portalService.getMasterPreferences(req.user);
+  }
+
+  @Patch('master/preferences')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async updateMasterPreferences(@Req() req: any, @Body() dto: UpdateMasterPreferencesDto) {
+    return this.portalService.updateMasterPreferences(req.user, dto.weeklyReportsEnabled);
   }
 
   @Post('master/partners')

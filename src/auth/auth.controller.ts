@@ -1,6 +1,7 @@
-import { Body, Controller, HttpCode, HttpStatus, Post, UnauthorizedException } from '@nestjs/common';
-import { IsEmail, IsNotEmpty, IsOptional, IsString, MinLength } from 'class-validator';
+import { Body, Controller, HttpCode, HttpStatus, Post, Req, UseGuards } from '@nestjs/common';
+import { IsEmail, IsNotEmpty, IsString, Matches, MinLength } from 'class-validator';
 import { AuthService } from './auth.service.js';
+import { JwtAuthGuard } from './jwt-auth.guard.js';
 
 class LoginDto {
   @IsEmail()
@@ -8,11 +9,11 @@ class LoginDto {
   email: string;
 
   @IsString()
-  @MinLength(8)
+  @MinLength(6)
   password: string;
 }
 
-class RegisterDto {
+class SignupDto {
   @IsString()
   @IsNotEmpty()
   name: string;
@@ -22,12 +23,43 @@ class RegisterDto {
   email: string;
 
   @IsString()
-  @MinLength(8)
+  @Matches(/^[A-Za-z0-9]{6}$/, {
+    message: 'Password must be exactly 6 letters and/or digits, with no symbols or spaces',
+  })
   password: string;
 
-  @IsOptional()
+  @IsNotEmpty()
   @IsString()
-  partnerCode?: string;
+  partnerCode: string;
+}
+
+class ForgotPasswordDto {
+  @IsEmail()
+  email: string;
+}
+
+class ResetPasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  token: string;
+
+  @IsString()
+  @Matches(/^[A-Za-z0-9]{6}$/, {
+    message: 'New password must be exactly 6 letters and/or digits, with no symbols or spaces',
+  })
+  newPassword: string;
+}
+
+class UpdatePasswordDto {
+  @IsString()
+  @IsNotEmpty()
+  currentPassword: string;
+
+  @IsString()
+  @Matches(/^[A-Za-z0-9]{6}$/, {
+    message: 'New password must be exactly 6 letters and/or digits, with no symbols or spaces',
+  })
+  newPassword: string;
 }
 
 @Controller('auth')
@@ -40,15 +72,33 @@ export class AuthController {
     return this.authService.login(dto.email, dto.password);
   }
 
-  @Post('register')
+  @Post('signup')
   @HttpCode(HttpStatus.CREATED)
-  async register(@Body() dto: RegisterDto) {
-    return this.authService.registerUser({
+  async signup(@Body() dto: SignupDto) {
+    return this.authService.registerPartner({
       email: dto.email,
       password: dto.password,
       name: dto.name,
-      role: dto.partnerCode ? 'partner' : 'master',
-      partnerCode: dto.partnerCode ?? null,
+      partnerCode: dto.partnerCode,
     });
+  }
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    return this.authService.requestPasswordReset(dto.email);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.OK)
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    return this.authService.resetPassword(dto.token, dto.newPassword);
+  }
+
+  @Post('update-password')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  async updatePassword(@Req() req: any, @Body() dto: UpdatePasswordDto) {
+    return this.authService.updatePassword(req.user.sub, dto.currentPassword, dto.newPassword);
   }
 }

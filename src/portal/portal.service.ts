@@ -83,7 +83,10 @@ export class PortalService {
       status: 'Settled',
     });
 
-    const totalCommission = (await this.dealModel.find({ code: partner.code }).lean()).reduce((sum, deal) => {
+    const estimatedCommission = (await this.dealModel.find({
+      code: partner.code,
+      commissionStatus: 'Estimated',
+    }).lean()).reduce((sum, deal) => {
       return sum + this.toNumber(deal.commission);
     }, 0);
 
@@ -93,7 +96,7 @@ export class PortalService {
         referredThisMonth,
         inFlight,
         settled,
-        estimatedCommission: `$${totalCommission.toLocaleString()}`,
+        estimatedCommission: `$${estimatedCommission.toLocaleString()}`,
       },
       deals: deals.map((deal) => this.mapDeal(deal)),
       referralCode: partner.code,
@@ -101,8 +104,11 @@ export class PortalService {
     };
   }
 
-  async getDeals(search?: string, stage?: string) {
+  async getDeals(user: any, search?: string, stage?: string) {
     const query: Record<string, any> = {};
+    if (user.role === 'partner') {
+      query.code = user.partnerCode;
+    }
     if (search) {
       query.$or = [
         { name: { $regex: search, $options: 'i' } },
@@ -128,17 +134,21 @@ export class PortalService {
     }));
   }
 
-  async getDealById(id: string) {
-    const deal = await this.dealModel.findOne({ id }).lean();
+  async getDealById(user: any, id: string) {
+    const query: Record<string, string> = { id };
+    if (user.role === 'partner') query.code = user.partnerCode;
+    const deal = await this.dealModel.findOne(query).lean();
     if (!deal) {
       throw new NotFoundException('Deal not found');
     }
     return this.mapDeal(deal);
   }
 
-  async updateDealStatus(id: string, status: DealStatus) {
+  async updateDealStatus(user: any, id: string, status: DealStatus) {
+    const query: Record<string, string> = { id };
+    if (user.role === 'partner') query.code = user.partnerCode;
     const updated = await this.dealModel.findOneAndUpdate(
-      { id },
+      query,
       {
         status,
         lastActivity: 'Updated just now',
@@ -153,7 +163,7 @@ export class PortalService {
     return this.mapDeal(updated);
   }
 
-  async createDirectReferral(dto: any) {
+  async createDirectReferral(user: any, dto: any) {
     const dealId = `KRD-${Math.floor(1000 + Math.random() * 9000)}`;
     const parsedAmount = Number(String(dto.amount || '250000').replace(/[^\d]/g, '')) || 250000;
     const commissionValue = Math.round(parsedAmount * 0.01);
@@ -168,7 +178,7 @@ export class PortalService {
       lastActivity: 'Just now',
       commission: `$${commissionValue.toLocaleString()}`,
       commissionStatus: 'Estimated',
-      code: dto.referralCode || 'HAYES01',
+      code: user.role === 'partner' ? user.partnerCode : dto.referralCode || 'HAYES01',
       submittedDate: 'Today',
       source: 'direct',
     });
@@ -190,8 +200,9 @@ export class PortalService {
     });
   }
 
-  async getCommissions() {
-    const rows = await this.commissionModel.find().sort({ createdAt: -1 }).lean();
+  async getCommissions(user: any) {
+    const query = user.role === 'partner' ? { partnerCode: user.partnerCode } : {};
+    const rows = await this.commissionModel.find(query).sort({ createdAt: -1 }).lean();
     return rows.map((row) => ({
       id: row.dealId,
       dealName: row.dealName,
@@ -214,12 +225,22 @@ export class PortalService {
 
     const commissionTotal = deals.reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
 
-    const topPartners = partners.slice(0, 3).map((partner, index) => ({
+    const partnerPerformance = partners.map((partner) => {
+      const partnerDeals = deals.filter((deal) => deal.code === partner.code);
+      const settledDeals = partnerDeals.filter((deal) => deal.status === 'Settled');
+      return {
+        name: partner.name,
+        code: partner.code,
+        deals: partnerDeals.length,
+        settledVolume: settledDeals.reduce((total, deal) => total + (deal.amountValue || 0), 0),
+      };
+    }).sort((left, right) => right.settledVolume - left.settledVolume);
+    const topPartners = partnerPerformance.slice(0, 3).map((partner, index) => ({
       rank: index + 1,
       name: partner.name,
       code: partner.code,
-      deals: Math.max(3, Math.round((index + 1) * 6)),
-      volume: `$${(Math.round((index + 1) * 180000) + 100000).toLocaleString()}`,
+      deals: partner.deals,
+      volume: `$${partner.settledVolume.toLocaleString()}`,
     }));
 
     return {
@@ -241,11 +262,15 @@ export class PortalService {
   }
 
   async getMasterPipeline() {
-    const deals = await this.dealModel.find().sort({ createdAt: -1 }).lean();
+    const [deals, partners] = await Promise.all([
+      this.dealModel.find().sort({ createdAt: -1 }).lean(),
+      this.partnerModel.find().lean(),
+    ]);
+    const namesByCode = new Map(partners.map((partner) => [partner.code, partner.name]));
     return deals.map((deal) => ({
       id: deal.id,
       name: deal.name,
-      partner: 'Hayes Partners',
+      partner: namesByCode.get(deal.code) || deal.code,
       partnerCode: deal.code,
       submitted: deal.submittedDate,
       stage: deal.status,
@@ -255,7 +280,10 @@ export class PortalService {
   }
 
   async getPartnerDirectory() {
-    const partners = await this.partnerModel.find().lean();
+    const [partners, deals] = await Promise.all([
+      this.partnerModel.find().lean(),
+      this.dealModel.find().lean(),
+    ]);
     return partners.map((partner) => ({
       id: partner.code,
       name: partner.name,
@@ -263,26 +291,70 @@ export class PortalService {
       contact: partner.name,
       email: partner.contactEmail,
       code: partner.code,
-      deals: 12,
-      settled: '$380k',
+      deals: deals.filter((deal) => deal.code === partner.code).length,
+      settled: `$${deals
+        .filter((deal) => deal.code === partner.code && deal.status === 'Settled')
+        .reduce((total, deal) => total + (deal.amountValue || 0), 0)
+        .toLocaleString()}`,
       status: partner.status === 'active' ? 'Active' : 'Paused',
       avatar: partner.name.split(' ').map((part) => part[0]).slice(0, 2).join('').toUpperCase(),
     }));
   }
 
   async getMasterReports() {
+    const [deals, partners] = await Promise.all([
+      this.dealModel.find().lean(),
+      this.partnerModel.find().lean(),
+    ]);
+    const sources = [
+      { label: 'Tracked link', source: 'partner', color: '#1e4868' },
+      { label: 'Typed code', source: 'typed-code', color: '#c79744' },
+      { label: 'Hero page', source: 'hero', color: '#7dc5eb' },
+      { label: 'Direct referral', source: 'direct', color: '#5b8c5a' },
+    ];
+    const totalDeals = deals.length;
+    const sourceMix = sources.map(({ label, source, color }) => ({
+      label,
+      value: totalDeals
+        ? Math.round((deals.filter((deal) => deal.source === source).length / totalDeals) * 100)
+        : 0,
+      color,
+    }));
+    const partnerPerformance = partners.map((partner) => ({
+      name: partner.name,
+      settledVolume: deals
+        .filter((deal) => deal.code === partner.code && deal.status === 'Settled')
+        .reduce((total, deal) => total + (deal.amountValue || 0), 0),
+    })).sort((left, right) => right.settledVolume - left.settledVolume);
+    const maxVolume = partnerPerformance[0]?.settledVolume || 0;
     return {
-      sourceMix: [
-        { label: 'Tracked link', value: 46, color: '#1e4868' },
-        { label: 'Typed code', value: 32, color: '#c79744' },
-        { label: 'Hero page', value: 22, color: '#7dc5eb' },
-      ],
-      partnerPerformance: [
-        { name: 'Mark Carroll', volume: '$640k', percent: 100 },
-        { name: 'Hayes Partners', volume: '$380k', percent: 60 },
-        { name: 'North & Kind Advisory', volume: '$295k', percent: 46 },
-      ],
+      sourceMix,
+      partnerPerformance: partnerPerformance.slice(0, 5).map((partner) => ({
+        name: partner.name,
+        volume: `$${partner.settledVolume.toLocaleString()}`,
+        percent: maxVolume ? Math.round((partner.settledVolume / maxVolume) * 100) : 0,
+      })),
     };
+  }
+
+  async getMasterPreferences(user: any) {
+    const master = await this.userModel.findById(user.sub).lean();
+    if (!master) {
+      throw new NotFoundException('Master user not found');
+    }
+    return { weeklyReportsEnabled: master.weeklyReportsEnabled ?? false };
+  }
+
+  async updateMasterPreferences(user: any, weeklyReportsEnabled: boolean) {
+    const master = await this.userModel.findByIdAndUpdate(
+      user.sub,
+      { weeklyReportsEnabled },
+      { returnDocument: 'after' },
+    ).lean();
+    if (!master) {
+      throw new NotFoundException('Master user not found');
+    }
+    return { weeklyReportsEnabled: master.weeklyReportsEnabled };
   }
 
   async getPartnerSettings(user: any) {
@@ -358,11 +430,15 @@ export class PortalService {
   }
 
   private async getIdSummary() {
-    const deals = await this.dealModel.find().lean();
+    const [deals, partners] = await Promise.all([
+      this.dealModel.find().lean(),
+      this.partnerModel.find().lean(),
+    ]);
+    const namesByCode = new Map(partners.map((partner) => [partner.code, partner.name]));
     return deals.map((deal) => ({
       ref: deal.id,
       name: deal.name,
-      partner: 'Hayes Partners',
+      partner: namesByCode.get(deal.code) || deal.code,
       submitted: deal.submittedDate,
       stage: deal.status,
       amountBand: deal.amount,

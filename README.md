@@ -31,6 +31,24 @@
 $ npm install
 ```
 
+Copy `.env.example` to `.env` and set `MONGODB_URI` and a long random `JWT_SECRET`.
+For password recovery, configure `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`,
+`SMTP_PASSWORD`, `EMAIL_FROM`, and `FRONTEND_URL`. The reset link expires after
+30 minutes and can only be used once. SMTP credentials belong only in the backend
+environment and must never be exposed in the frontend.
+
+The authentication API includes:
+
+- `POST /api/auth/signup` — creates a partner account with an active partner code.
+- `POST /api/auth/login` — returns a JWT.
+- `POST /api/auth/forgot-password` — emails a single-use reset link.
+- `POST /api/auth/reset-password` — consumes a reset token and sets a new password.
+- `POST /api/auth/update-password` — changes the signed-in user's password; requires a bearer token.
+
+New passwords must be exactly six letters and/or digits (no spaces or symbols) for
+signup, reset, and password changes. Login continues to accept existing account
+passwords so seeded or previously configured credentials remain usable.
+
 ## Compile and run the project
 
 ```bash
