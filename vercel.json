@@ -5,5 +5,11 @@
     "api/[...path].ts": {
       "maxDuration": 30
     }
-  }
+  },
+  "rewrites": [
+    {
+      "source": "/",
+      "destination": "/api/portal/health"
+    }
+  ]
 }
