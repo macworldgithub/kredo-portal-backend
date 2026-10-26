@@ -26,8 +26,9 @@ async function bootstrap() {
   app.enableShutdownHooks();
 
   const port = process.env.PORT ?? 5000;
-  await app.listen(port);
-  logger.log(`Server running on port ${port} [${isProduction ? 'production' : 'development'}]`);
+  const host = process.env.HOST ?? '0.0.0.0';
+  await app.listen(port, host);
+  logger.log(`Server running on ${host}:${port} [${isProduction ? 'production' : 'development'}]`);
 
   // Signal PM2 that the app is ready (works with wait_ready: true)
   if (typeof process.send === 'function') {

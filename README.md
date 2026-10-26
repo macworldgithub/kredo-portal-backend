@@ -110,6 +110,32 @@ Vercel project and redeploy it. Verify that both frontend and backend are
 available over HTTPS, then test login, signup, CORS-protected API calls, and
 email-based password recovery.
 
+## Deploy to an Ubuntu/Debian VPS (without Docker)
+
+The `deploy.sh` script installs Node.js 22, PM2, Nginx, and Certbot; builds the
+API; configures PM2 to restart it at boot; proxies both
+`kred-backend.omnisuiteai.com` and `www.kred-backend.omnisuiteai.com` to port
+`5099`; and requests a Let's Encrypt certificate. It must be run from this
+backend project directory on the VPS with sudo access.
+
+Before running it:
+
+1. Point both hostnames' DNS A records to the VPS IPv4 address. Allow inbound
+   ports 80 and 443 in the VPS/cloud firewall; port 5099 is only used locally
+   behind Nginx.
+2. Create `.env` from `.env.example` and set production values for `MONGODB_URI`
+   (a reachable production MongoDB), `JWT_SECRET`, `MASTER_EMAIL`, and
+   `MASTER_PASSWORD`. Set `FRONTEND_URL` and `CORS_ORIGINS` to the deployed
+   **frontend** origin(s), not the backend API hostname. Configure SMTP
+   variables if password reset emails are required.
+3. Run `sudo sh deploy.sh` from this directory and enter an email address for
+   Let's Encrypt when prompted.
+
+The script does not overwrite the existing `.env`. To deploy updates, upload the
+new source, then run `sudo sh deploy.sh` again. Check service output with
+`pm2 logs kredo-portal-backend` and verify
+`https://kred-backend.omnisuiteai.com/api/portal/health`.
+
 ## Observability
 
 In production applications, observability is essential for understanding how your system behaves, detecting issues early, and maintaining reliable performance.

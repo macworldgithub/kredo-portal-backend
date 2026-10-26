@@ -8,7 +8,8 @@ module.exports = {
       exec_mode: 'cluster',
       env: {
         NODE_ENV: 'production',
-        PORT: 5000,
+        PORT: 5099,
+        HOST: '127.0.0.1',
       },
       // Restart if memory exceeds 512MB per worker
       max_memory_restart: '512M',
@@ -16,7 +17,7 @@ module.exports = {
       exp_backoff_restart_delay: 100,
       // Graceful shutdown timeout (ms)
       kill_timeout: 10000,
-      // Wait 3s after ready before considering app "online"
+      // Wait for ready signal before considering app "online"
       wait_ready: true,
       listen_timeout: 10000,
       // Log configuration
