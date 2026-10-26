@@ -18,12 +18,15 @@ if [ "$(id -u)" -ne 0 ]; then
   fail "Run with sudo, for example: sudo sh deploy.sh"
 fi
 
-DEPLOY_USER=${SUDO_USER:-${DEPLOY_USER:-}}
-[ -n "$DEPLOY_USER" ] || fail "Run with sudo from a non-root deployment account."
+DEPLOY_USER=${DEPLOY_USER:-root}
 id "$DEPLOY_USER" >/dev/null 2>&1 || fail "Deployment user '$DEPLOY_USER' does not exist."
 DEPLOY_GROUP=$(id -gn "$DEPLOY_USER")
 DEPLOY_HOME=$(getent passwd "$DEPLOY_USER" | cut -d: -f6)
 [ -n "$DEPLOY_HOME" ] || fail "Could not determine the home directory for '$DEPLOY_USER'."
+
+if [ "$DEPLOY_USER" = "root" ]; then
+  printf '%s\n' "Warning: running the API as root is less secure than using a dedicated service account."
+fi
 
 [ -f "$PROJECT_DIR/package.json" ] || fail "Run this script from the backend project."
 [ -f "$PROJECT_DIR/ecosystem.config.cjs" ] || fail "ecosystem.config.cjs is missing."
@@ -42,8 +45,12 @@ require_env MASTER_PASSWORD
 require_env FRONTEND_URL
 require_env CORS_ORIGINS
 
-if grep -Eq '^[[:space:]]*(JWT_SECRET[[:space:]]*=[[:space:]]*replace-me-with-a-long-random-secret|MASTER_EMAIL[[:space:]]*=[[:space:]]*admin@kredo\.local|MASTER_PASSWORD[[:space:]]*=[[:space:]]*ChangeMe123!|FRONTEND_URL[[:space:]]*=[[:space:]]*https://yourdomain\.com|CORS_ORIGINS[[:space:]]*=[[:space:]]*https://yourdomain\.com)' "$ENV_FILE"; then
+if grep -Eq '^[[:space:]]*(JWT_SECRET[[:space:]]*=[[:space:]]*replace-me-with-a-long-random-secret|MASTER_EMAIL[[:space:]]*=[[:space:]]*admin@kredo\.local|MASTER_PASSWORD[[:space:]]*=[[:space:]]*ChangeMe123!|PARTNER_EMAIL[[:space:]]*=[[:space:]]*partner@kredo\.local|PARTNER_PASSWORD[[:space:]]*=[[:space:]]*ChangeMe123!|FRONTEND_URL[[:space:]]*=[[:space:]]*https://yourdomain\.com|CORS_ORIGINS[[:space:]]*=[[:space:]]*https://yourdomain\.com)' "$ENV_FILE"; then
   fail "Replace the sample production credentials and origins in $ENV_FILE."
+fi
+
+if grep -Eq '^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[^#]*<[^>]+>' "$ENV_FILE"; then
+  fail "Replace all <...> placeholders in $ENV_FILE with real production values."
 fi
 
 if grep -Eq '^[[:space:]]*MONGODB_URI[[:space:]]*=[[:space:]]*mongodb://(127\.0\.0\.1|localhost)(:[0-9]+)?/' "$ENV_FILE" \
@@ -54,6 +61,8 @@ fi
 if ! runuser -u "$DEPLOY_USER" -- test -r "$ENV_FILE"; then
   fail "Make $ENV_FILE readable by '$DEPLOY_USER' (keep it private, e.g. mode 600)."
 fi
+chown "$DEPLOY_USER:$DEPLOY_GROUP" "$ENV_FILE"
+chmod 0600 "$ENV_FILE"
 
 if [ ! -r /etc/os-release ] || ! grep -Eq '^ID=(ubuntu|debian)$' /etc/os-release; then
   fail "This deployment script supports Ubuntu and Debian."

@@ -128,8 +128,9 @@ Before running it:
    `MASTER_PASSWORD`. Set `FRONTEND_URL` and `CORS_ORIGINS` to the deployed
    **frontend** origin(s), not the backend API hostname. Configure SMTP
    variables if password reset emails are required.
-3. Run `sudo sh deploy.sh` from this directory and enter an email address for
-   Let's Encrypt when prompted.
+3. Run `sudo sh deploy.sh` (or, as root, `./deploy.sh`) from this directory and
+   enter an email address for Let's Encrypt when prompted. Running the backend
+   as root works, but a dedicated service account is safer.
 
 The script does not overwrite the existing `.env`. To deploy updates, upload the
 new source, then run `sudo sh deploy.sh` again. Check service output with
