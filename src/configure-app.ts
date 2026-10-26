@@ -1,4 +1,6 @@
 import { ValidationPipe, type INestApplication } from '@nestjs/common';
+import helmet from 'helmet';
+import compression from 'compression';
 
 function isLocalDevelopmentOrigin(origin: string): boolean {
   if (process.env.NODE_ENV === 'production') return false;
@@ -23,6 +25,11 @@ function isLocalDevelopmentOrigin(origin: string): boolean {
 export function configureApp(app: INestApplication): void {
   app.setGlobalPrefix('api');
 
+  // ── Security middleware ──
+  app.use(helmet());
+  app.use(compression());
+
+  // ── CORS ──
   const allowedOrigins = new Set(
     [
       process.env.FRONTEND_URL,
@@ -45,6 +52,7 @@ export function configureApp(app: INestApplication): void {
     credentials: true,
   });
 
+  // ── Validation ──
   app.useGlobalPipes(
     new ValidationPipe({
       transform: true,
