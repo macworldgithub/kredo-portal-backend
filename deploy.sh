@@ -1,8 +1,8 @@
 #!/bin/sh
 set -eu
 
-DOMAIN="kred-backend.omnisuiteai.com"
-WWW_DOMAIN="www.kred-backend.omnisuiteai.com"
+DOMAIN="kredo-backend.omnisuiteai.com"
+WWW_DOMAIN="www.kredo-backend.omnisuiteai.com"
 PORT="5099"
 PROJECT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 ENV_FILE="$PROJECT_DIR/.env"
