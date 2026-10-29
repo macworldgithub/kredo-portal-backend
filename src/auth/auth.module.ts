@@ -35,6 +35,6 @@ import { Partner, PartnerSchema } from '../schemas/partner.schema.js';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtStrategy, MailService],
-  exports: [AuthService],
+  exports: [AuthService, MailService],
 })
 export class AuthModule {}

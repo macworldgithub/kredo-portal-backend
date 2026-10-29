@@ -7,6 +7,7 @@ import { Deal, DealStatus } from '../schemas/deal.schema.js';
 import { Partner } from '../schemas/partner.schema.js';
 import { Application } from '../schemas/application.schema.js';
 import { ContactRequest } from '../schemas/contact-request.schema.js';
+import { MailService } from '../auth/mail.service.js';
 
 @Injectable()
 export class PortalService {
@@ -17,6 +18,7 @@ export class PortalService {
     @InjectModel(Application.name) private readonly applicationModel: Model<Application>,
     @InjectModel(ContactRequest.name) private readonly contactRequestModel: Model<ContactRequest>,
     @InjectModel(User.name) private readonly userModel: Model<User>,
+    private readonly mailService: MailService,
   ) {}
 
   private toNumber(value: string): number {
@@ -312,6 +314,22 @@ export class PortalService {
       ],
     });
 
+    // Send email alert to kredo@vhmpartners.com.au
+    void this.mailService.sendFormNotification(
+      `[New Referral] ${dto.businessName} - ${dealId}`,
+      `<h2>New Direct Referral Lodged</h2>
+      <p><strong>Deal ID:</strong> ${dealId}</p>
+      <p><strong>Business Name:</strong> ${dto.businessName}</p>
+      <p><strong>Contact Person:</strong> ${dto.contactName}</p>
+      <p><strong>Email:</strong> ${dto.email || 'N/A'}</p>
+      <p><strong>Phone:</strong> ${dto.phone || 'N/A'}</p>
+      <p><strong>Requested Amount:</strong> $${parsedAmount.toLocaleString()}</p>
+      <p><strong>Facility Type:</strong> ${dto.facilityType || 'Asset & Equipment'}</p>
+      <p><strong>Partner Code:</strong> ${user.role === 'partner' ? user.partnerCode : dto.referralCode || 'HAYES01'}</p>
+      <p><strong>Referred By:</strong> ${user.name || 'Partner'}</p>`,
+      `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}`,
+    );
+
     return this.mapDeal(created);
   }
 
@@ -361,11 +379,30 @@ export class PortalService {
       ],
     });
 
+    // Send email alert to kredo@vhmpartners.com.au
+    const directorsListHtml = (dto.directors && Array.isArray(dto.directors) && dto.directors.length > 0)
+      ? dto.directors.map((d: any, idx: number) => `<li><strong>Director ${idx + 1}:</strong> ${d.salutation || ''} ${d.firstName} ${d.middleName || ''} ${d.lastName} - ${d.email} | ${d.phone}</li>`).join('')
+      : `<li>${dto.directorName} - ${dto.email} | ${dto.phone}</li>`;
+
+    void this.mailService.sendFormNotification(
+      `[New Loan Application] ${dto.tradingName} - ${dealId}`,
+      `<h2>New Loan Application Submitted</h2>
+      <p><strong>Deal Reference:</strong> ${dealId}</p>
+      <p><strong>Trading Name:</strong> ${dto.tradingName}</p>
+      <p><strong>ABN:</strong> ${dto.abn || 'N/A'}</p>
+      <p><strong>Requested Amount:</strong> ${dto.amount}</p>
+      <p><strong>Purpose:</strong> ${dto.purpose || 'Commercial Finance'}</p>
+      <p><strong>Referral Code:</strong> ${dto.referralCode || 'Direct (No code)'}</p>
+      <h3>Directors:</h3>
+      <ul>${directorsListHtml}</ul>`,
+      `New Loan Application Submitted\nRef: ${dealId}\nBusiness: ${dto.tradingName}\nABN: ${dto.abn}\nAmount: ${dto.amount}\nContact: ${dto.directorName} (${dto.phone})`,
+    );
+
     return application;
   }
 
   async createContactRequest(dto: any) {
-    return this.contactRequestModel.create({
+    const contactReq = await this.contactRequestModel.create({
       businessName: dto.businessName,
       contactName: dto.contactName,
       phone: dto.phone,
@@ -375,6 +412,22 @@ export class PortalService {
       notes: dto.notes || null,
       status: 'new',
     });
+
+    // Send email alert to kredo@vhmpartners.com.au
+    void this.mailService.sendFormNotification(
+      `[Talk to Someone Request] ${dto.businessName || dto.contactName}`,
+      `<h2>New Contact / Callback Request</h2>
+      <p><strong>Business Name:</strong> ${dto.businessName || 'N/A'}</p>
+      <p><strong>Contact Name:</strong> ${dto.contactName}</p>
+      <p><strong>Phone:</strong> ${dto.phone}</p>
+      <p><strong>Email:</strong> ${dto.email || 'N/A'}</p>
+      <p><strong>Source Step:</strong> ${dto.source || 'Website'}</p>
+      <p><strong>Referral Code:</strong> ${dto.referralCode || 'None'}</p>
+      ${dto.notes ? `<p><strong>Notes:</strong> ${dto.notes}</p>` : ''}`,
+      `New Contact Request\nName: ${dto.contactName}\nBusiness: ${dto.businessName}\nPhone: ${dto.phone}\nEmail: ${dto.email}`,
+    );
+
+    return contactReq;
   }
 
   async getCommissions(user: any) {
