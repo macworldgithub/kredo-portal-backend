@@ -1,9 +1,30 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 
-export type DealStatus = 'In assessment' | 'Approved' | 'Docs / settlement' | 'Settled' | 'Declined' | 'Application received' | 'Declined / withdrawn';
+export type DealStatus =
+  | 'Lead received'
+  | 'Customer invited'
+  | 'Application submitted'
+  | 'Waiting on customer'
+  | 'In assessment'
+  | 'Approved'
+  | 'Docs / settlement'
+  | 'Settled'
+  | 'Declined'
+  | 'Closed Lost'
+  | 'Application received'
+  | 'Declined / withdrawn';
 
 export type CommissionStatus = 'Estimated' | 'Confirmed' | 'Paid';
+
+export interface DiaryNote {
+  id: string;
+  author: string;
+  content: string;
+  nextSteps?: string;
+  isInternal: boolean;
+  createdAt: string;
+}
 
 @Schema({ timestamps: true })
 export class Deal {
@@ -25,7 +46,24 @@ export class Deal {
   @Prop({ required: true })
   type: string;
 
-  @Prop({ type: String, required: true, enum: ['In assessment', 'Approved', 'Docs / settlement', 'Settled', 'Declined', 'Application received', 'Declined / withdrawn'] })
+  @Prop({
+    type: String,
+    required: true,
+    enum: [
+      'Lead received',
+      'Customer invited',
+      'Application submitted',
+      'Waiting on customer',
+      'In assessment',
+      'Approved',
+      'Docs / settlement',
+      'Settled',
+      'Declined',
+      'Closed Lost',
+      'Application received',
+      'Declined / withdrawn',
+    ],
+  })
   status: DealStatus;
 
   @Prop({ required: true })
@@ -48,6 +86,25 @@ export class Deal {
 
   @Prop({ type: String, default: null, nullable: true })
   partnerId?: string | null;
+
+  @Prop({ type: String, default: null, nullable: true })
+  lostReason?: string | null;
+
+  @Prop({
+    type: [
+      {
+        id: { type: String, required: true },
+        author: { type: String, required: true },
+        content: { type: String, required: true },
+        nextSteps: { type: String, default: null, nullable: true },
+        isInternal: { type: Boolean, default: true },
+        createdAt: { type: String, required: true },
+      },
+    ],
+    default: [],
+  })
+  diaryNotes: DiaryNote[];
 }
 
+export type DealDocument = HydratedDocument<Deal>;
 export const DealSchema = SchemaFactory.createForClass(Deal);

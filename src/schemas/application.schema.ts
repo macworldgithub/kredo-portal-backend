@@ -1,6 +1,15 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { HydratedDocument } from 'mongoose';
 
+export interface DirectorDetail {
+  salutation?: string;
+  firstName: string;
+  middleName?: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}
+
 @Schema({ timestamps: true })
 export class Application {
   @Prop({ required: true })
@@ -23,6 +32,21 @@ export class Application {
 
   @Prop({ required: true })
   phone: string;
+
+  @Prop({
+    type: [
+      {
+        salutation: { type: String, default: null, nullable: true },
+        firstName: { type: String, required: true },
+        middleName: { type: String, default: null, nullable: true },
+        lastName: { type: String, required: true },
+        email: { type: String, required: true },
+        phone: { type: String, required: true },
+      },
+    ],
+    default: [],
+  })
+  directors: DirectorDetail[];
 
   @Prop({ type: String, default: null, nullable: true })
   referralCode?: string | null;

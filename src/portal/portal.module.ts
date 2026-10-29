@@ -7,6 +7,7 @@ import { Application, ApplicationSchema } from '../schemas/application.schema.js
 import { Commission, CommissionSchema } from '../schemas/commission.schema.js';
 import { Deal, DealSchema } from '../schemas/deal.schema.js';
 import { Partner, PartnerSchema } from '../schemas/partner.schema.js';
+import { ContactRequest, ContactRequestSchema } from '../schemas/contact-request.schema.js';
 import { PortalController } from './portal.controller.js';
 import { PortalService } from './portal.service.js';
 
@@ -18,6 +19,7 @@ import { PortalService } from './portal.service.js';
       { name: Deal.name, schema: DealSchema },
       { name: Commission.name, schema: CommissionSchema },
       { name: Application.name, schema: ApplicationSchema },
+      { name: ContactRequest.name, schema: ContactRequestSchema },
       { name: User.name, schema: UserSchema },
     ]),
   ],

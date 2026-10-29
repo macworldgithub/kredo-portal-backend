@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
-import { IsBoolean, IsEmail, IsIn, IsOptional, IsString } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/role.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -7,8 +8,25 @@ import { PortalService } from './portal.service.js';
 
 class UpdateDealStatusDto {
   @IsString()
-  @IsIn(['In assessment', 'Approved', 'Docs / settlement', 'Settled', 'Declined'])
+  @IsIn([
+    'Lead received',
+    'Customer invited',
+    'Application submitted',
+    'Waiting on customer',
+    'In assessment',
+    'Approved',
+    'Docs / settlement',
+    'Settled',
+    'Declined',
+    'Closed Lost',
+    'Application received',
+    'Declined / withdrawn',
+  ])
   status: string;
+
+  @IsOptional()
+  @IsString()
+  lostReason?: string;
 }
 
 class CreateDirectReferralDto {
@@ -34,6 +52,39 @@ class CreateDirectReferralDto {
   @IsOptional()
   @IsString()
   referralCode?: string;
+}
+
+class CreateDiaryNoteDto {
+  @IsString()
+  @IsNotEmpty()
+  content: string;
+
+  @IsOptional()
+  @IsString()
+  nextSteps?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isInternal?: boolean;
+}
+
+class UpdateCommissionDto {
+  @IsOptional()
+  @IsString()
+  @IsIn(['Confirmed', 'Paid', 'Processing'])
+  status?: 'Confirmed' | 'Paid' | 'Processing';
+
+  @IsOptional()
+  @IsString()
+  commissionAmount?: string;
+
+  @IsOptional()
+  @IsString()
+  paidDate?: string;
+
+  @IsOptional()
+  @IsString()
+  rate?: string;
 }
 
 class UpdateSettingsDto {
@@ -84,6 +135,28 @@ class CreatePartnerDto {
   uniqueCode?: string;
 }
 
+class DirectorDetailDto {
+  @IsOptional()
+  @IsString()
+  salutation?: string;
+
+  @IsString()
+  firstName: string;
+
+  @IsOptional()
+  @IsString()
+  middleName?: string;
+
+  @IsString()
+  lastName: string;
+
+  @IsEmail()
+  email: string;
+
+  @IsString()
+  phone: string;
+}
+
 class CreateApplicationDto {
   @IsString()
   tradingName: string;
@@ -107,8 +180,40 @@ class CreateApplicationDto {
   phone: string;
 
   @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => DirectorDetailDto)
+  directors?: DirectorDetailDto[];
+
+  @IsOptional()
   @IsString()
   referralCode?: string;
+}
+
+class CreateContactRequestDto {
+  @IsString()
+  businessName: string;
+
+  @IsString()
+  contactName: string;
+
+  @IsString()
+  phone: string;
+
+  @IsEmail()
+  email: string;
+
+  @IsOptional()
+  @IsString()
+  source?: string;
+
+  @IsOptional()
+  @IsString()
+  referralCode?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }
 
 class UpdateMasterPreferencesDto {
@@ -143,8 +248,13 @@ export class PortalController {
 
   @Get('deals')
   @UseGuards(JwtAuthGuard)
-  async getDeals(@Req() req: any, @Query('search') search?: string, @Query('stage') stage?: string) {
-    return this.portalService.getDeals(req.user, search, stage);
+  async getDeals(
+    @Req() req: any,
+    @Query('search') search?: string,
+    @Query('stage') stage?: string,
+    @Query('partnerCode') partnerCode?: string,
+  ) {
+    return this.portalService.getDeals(req.user, search, stage, partnerCode);
   }
 
   @Get('deals/:id')
@@ -156,7 +266,13 @@ export class PortalController {
   @Patch('deals/:id/status')
   @UseGuards(JwtAuthGuard)
   async updateDealStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDealStatusDto) {
-    return this.portalService.updateDealStatus(req.user, id, dto.status as any);
+    return this.portalService.updateDealStatus(req.user, id, dto.status as any, dto.lostReason);
+  }
+
+  @Post('deals/:id/notes')
+  @UseGuards(JwtAuthGuard)
+  async addDiaryNote(@Req() req: any, @Param('id') id: string, @Body() dto: CreateDiaryNoteDto) {
+    return this.portalService.addDiaryNote(req.user, id, dto);
   }
 
   @Post('deals/direct')
@@ -169,6 +285,13 @@ export class PortalController {
   @UseGuards(JwtAuthGuard)
   async getCommissions(@Req() req: any) {
     return this.portalService.getCommissions(req.user);
+  }
+
+  @Patch('commissions/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async updateCommission(@Param('id') id: string, @Body() dto: UpdateCommissionDto) {
+    return this.portalService.updateCommission(id, dto);
   }
 
   @Get('settings')
@@ -188,6 +311,11 @@ export class PortalController {
     return this.portalService.createApplication(dto);
   }
 
+  @Post('contact-request')
+  async createContactRequest(@Body() dto: CreateContactRequestDto) {
+    return this.portalService.createContactRequest(dto);
+  }
+
   @Get('master/overview')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('master')
@@ -200,6 +328,13 @@ export class PortalController {
   @Roles('master')
   async getMasterPipeline() {
     return this.portalService.getMasterPipeline();
+  }
+
+  @Get('master/pipeline-stages')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async getMasterPipelineStages() {
+    return this.portalService.getMasterPipelineStages();
   }
 
   @Get('master/partners')
