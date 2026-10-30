@@ -718,6 +718,53 @@ export class PortalService {
     };
   }
 
+  async updateMasterPartner(code: string, dto: { name?: string; contactEmail?: string; partnerType?: string; status?: string; phone?: string }) {
+    const partner = await this.partnerModel.findOne({ code: code.toUpperCase() }).exec();
+    if (!partner) {
+      throw new NotFoundException(`Partner with code ${code} not found`);
+    }
+
+    if (dto.name !== undefined) partner.name = dto.name;
+    if (dto.contactEmail !== undefined) partner.contactEmail = dto.contactEmail;
+    if (dto.partnerType !== undefined) {
+      partner.partnerType = dto.partnerType;
+      partner.isHero = dto.partnerType === 'Hero';
+    }
+    if (dto.status !== undefined) {
+      partner.status = dto.status.toLowerCase() === 'active' ? 'active' : 'paused';
+    }
+    if (dto.phone !== undefined) partner.phone = dto.phone;
+
+    await partner.save();
+
+    // Also update associated user if exists
+    if (dto.name || dto.contactEmail) {
+      await this.userModel.findOneAndUpdate(
+        { partnerCode: partner.code },
+        {
+          ...(dto.name ? { name: dto.name } : {}),
+          ...(dto.contactEmail ? { email: dto.contactEmail.toLowerCase() } : {}),
+        },
+      );
+    }
+
+    return partner;
+  }
+
+  async deleteMasterPartner(code: string) {
+    const normalizedCode = code.toUpperCase();
+    const partner = await this.partnerModel.findOne({ code: normalizedCode }).exec();
+    if (!partner) {
+      throw new NotFoundException(`Partner with code ${code} not found`);
+    }
+
+    await this.partnerModel.deleteOne({ code: normalizedCode });
+    // Also remove or deactivate partner user
+    await this.userModel.deleteMany({ partnerCode: normalizedCode });
+
+    return { success: true, message: `Partner ${partner.name} (${normalizedCode}) deleted` };
+  }
+
   private async getIdSummary() {
     const [deals, partners] = await Promise.all([
       this.dealModel.find().lean(),

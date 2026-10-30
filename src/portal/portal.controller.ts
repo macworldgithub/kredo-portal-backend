@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
 import { IsArray, IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
@@ -114,6 +114,28 @@ class UpdateSettingsDto {
 
   @IsOptional()
   marketingEmails?: boolean;
+}
+
+class UpdateMasterPartnerDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsEmail()
+  contactEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  partnerType?: string;
+
+  @IsOptional()
+  @IsString()
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
 }
 
 class CreatePartnerDto {
@@ -370,5 +392,19 @@ export class PortalController {
   @Roles('master')
   async addPartner(@Body() dto: CreatePartnerDto) {
     return this.portalService.addPartner(dto);
+  }
+
+  @Patch('master/partners/:code')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async updatePartner(@Param('code') code: string, @Body() dto: UpdateMasterPartnerDto) {
+    return this.portalService.updateMasterPartner(code, dto);
+  }
+
+  @Delete('master/partners/:code')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async deletePartner(@Param('code') code: string) {
+    return this.portalService.deleteMasterPartner(code);
   }
 }
