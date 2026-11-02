@@ -116,6 +116,24 @@ class UpdateSettingsDto {
   marketingEmails?: boolean;
 }
 
+class UpdateDealDto {
+  @IsOptional()
+  @IsString()
+  name?: string;
+
+  @IsOptional()
+  @IsString()
+  applicant?: string;
+
+  @IsOptional()
+  @IsString()
+  amount?: string;
+
+  @IsOptional()
+  @IsString()
+  type?: string;
+}
+
 class UpdateMasterPartnerDto {
   @IsOptional()
   @IsString()
@@ -136,6 +154,14 @@ class UpdateMasterPartnerDto {
   @IsOptional()
   @IsString()
   phone?: string;
+
+  @IsOptional()
+  @IsString()
+  abn?: string;
+
+  @IsOptional()
+  @IsString()
+  commissionRate?: string;
 }
 
 class CreatePartnerDto {
@@ -147,6 +173,18 @@ class CreatePartnerDto {
 
   @IsEmail()
   email: string;
+
+  @IsOptional()
+  @IsString()
+  phone?: string;
+
+  @IsOptional()
+  @IsString()
+  abn?: string;
+
+  @IsOptional()
+  @IsString()
+  commissionRate?: string;
 
   @IsOptional()
   @IsString()
@@ -283,6 +321,12 @@ export class PortalController {
   @UseGuards(JwtAuthGuard)
   async getDeal(@Req() req: any, @Param('id') id: string) {
     return this.portalService.getDealById(req.user, id);
+  }
+
+  @Patch('deals/:id')
+  @UseGuards(JwtAuthGuard)
+  async updateDeal(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDealDto) {
+    return this.portalService.updateDeal(req.user, id, dto);
   }
 
   @Patch('deals/:id/status')

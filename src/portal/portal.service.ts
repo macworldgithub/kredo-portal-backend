@@ -222,6 +222,58 @@ export class PortalService {
     return this.mapDeal(updated);
   }
 
+  async updateDeal(user: any, id: string, dto: { name?: string; applicant?: string; amount?: string; type?: string }) {
+    const query: Record<string, string> = { id };
+    if (user.role === 'partner') query.code = user.partnerCode;
+
+    const deal = await this.dealModel.findOne(query).exec();
+    if (!deal) {
+      throw new NotFoundException('Deal not found');
+    }
+
+    const changes: string[] = [];
+    if (dto.name && dto.name !== deal.name) {
+      changes.push(`Business: "${deal.name}" -> "${dto.name}"`);
+      deal.name = dto.name;
+    }
+    if (dto.applicant && dto.applicant !== deal.applicant) {
+      changes.push(`Contact: "${deal.applicant}" -> "${dto.applicant}"`);
+      deal.applicant = dto.applicant;
+    }
+    if (dto.amount && dto.amount !== deal.amount) {
+      changes.push(`Amount: "${deal.amount}" -> "${dto.amount}"`);
+      const parsedAmount = Number(String(dto.amount).replace(/[^\d]/g, '')) || deal.amountValue;
+      deal.amount = dto.amount.startsWith('$') ? dto.amount : `$${Number(parsedAmount).toLocaleString()}`;
+      deal.amountValue = parsedAmount;
+      const commissionValue = Math.round(parsedAmount * 0.01);
+      deal.commission = `$${commissionValue.toLocaleString()}`;
+    }
+    if (dto.type && dto.type !== deal.type) {
+      changes.push(`Facility Type: "${deal.type}" -> "${dto.type}"`);
+      deal.type = dto.type;
+    }
+
+    if (changes.length > 0) {
+      deal.lastActivity = 'Deal details edited';
+      deal.diaryNotes.unshift({
+        id: `NOTE-${Date.now().toString().slice(-6)}`,
+        author: user.name || (user.role === 'master' ? 'Kredo Staff' : 'Partner'),
+        content: `Lead updated: ${changes.join(', ')}`,
+        isInternal: true,
+        createdAt: new Date().toLocaleString('en-AU', {
+          day: 'numeric',
+          month: 'short',
+          year: 'numeric',
+          hour: 'numeric',
+          minute: '2-digit',
+        }),
+      });
+      await deal.save();
+    }
+
+    return this.mapDeal(deal);
+  }
+
   async addDiaryNote(user: any, dealId: string, dto: { content: string; nextSteps?: string; isInternal?: boolean }) {
     const query: Record<string, string> = { id: dealId };
     if (user.role === 'partner') query.code = user.partnerCode;
@@ -579,6 +631,9 @@ export class PortalService {
         .reduce((total, deal) => total + (deal.amountValue || 0), 0)
         .toLocaleString()}`,
       status: partner.status === 'active' ? 'Active' : 'Paused',
+      phone: partner.phone || '1300 4 KREDO',
+      abn: partner.abn || '48 000 000 000',
+      commissionRate: partner.commissionRate || '1.00%',
       avatar: partner.name
         .split(' ')
         .map((part) => part[0])
@@ -682,15 +737,21 @@ export class PortalService {
       throw new Error('Partner code already exists');
     }
 
+    const partnerPhone = dto.phone || '1300 4 KREDO';
+    const partnerAbn = dto.abn || '48 000 000 000';
+    const commissionRate = dto.commissionRate || '1.00%';
+    const partnerEmail = (dto.email || '').toLowerCase().trim();
+
     const partner = await this.partnerModel.create({
       name: dto.tradingName,
       code,
       partnerType: dto.partnerType || 'Standard',
-      contactEmail: dto.email,
-      phone: '1300 4 KREDO',
+      contactEmail: partnerEmail,
+      phone: partnerPhone,
       bankAccount: '1098 4421',
       bsb: '062-000',
-      abn: '48 000 000 000',
+      abn: partnerAbn,
+      commissionRate,
       referralLink: `kredo.au/apply?ref=${code}`,
       notificationsEnabled: true,
       settlementAlerts: true,
@@ -699,11 +760,10 @@ export class PortalService {
       isHero: dto.partnerType === 'Hero',
     });
 
-    const user = await this.userModel.findOne({ email: dto.email.toLowerCase() }).exec();
+    const user = await this.userModel.findOne({ email: partnerEmail }).exec();
     if (!user) {
-      const email = dto.email.toLowerCase();
       await this.userModel.create({
-        email,
+        email: partnerEmail,
         passwordHash: '$2a$10$9P4fJ5Uz7eO1mknMzjDkzerVp.5vUeW4XxXFAZV3mVJrbo54yJjX2',
         role: 'partner',
         name: dto.tradingName,
@@ -712,13 +772,48 @@ export class PortalService {
       });
     }
 
+    // 1. Send Welcome Email directly to the new Partner (Issue #1 fix)
+    if (partnerEmail) {
+      const applyUrl = `https://kredo-portal-frontend.vercel.app/apply?ref=${code}`;
+      void this.mailService.sendMailTo(
+        partnerEmail,
+        `Welcome to Kredo Partner Network - Your Partner Code: ${code}`,
+        `<h2>Welcome to the Kredo Partner Network!</h2>
+        <p>Dear ${dto.primaryContact || dto.tradingName},</p>
+        <p>Your referral partner profile for <strong>${dto.tradingName}</strong> has been successfully activated on the Kredo Referral Platform.</p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;" />
+        <p><strong>Your Unique Partner Code:</strong> <span style="font-size:18px;font-weight:bold;color:#0a1926;background:#e0f2fe;padding:2px 8px;border-radius:4px;">${code}</span></p>
+        <p><strong>Your Client Application Link:</strong> <a href="${applyUrl}">${applyUrl}</a></p>
+        <p><strong>Commission Structure:</strong> ${commissionRate} trail settlement commission</p>
+        <hr style="border:none;border-top:1px solid #e2e8f0;margin:20px 0;" />
+        <p>Clients who apply through your link or quote your code will automatically be tracked to your account for assessment and commission payout.</p>
+        <p>Best regards,<br/><strong>The Kredo Partnerships Team</strong><br/>Phone: 1300 4 KREDO (1300 457 336)<br/>Email: kredo@vhmpartners.com.au</p>`,
+        `Welcome to Kredo Partner Network!\n\nYour Partner Code: ${code}\nClient Application Link: ${applyUrl}\nCommission Structure: ${commissionRate}\n\nPhone: 1300 4 KREDO | Email: kredo@vhmpartners.com.au`,
+      );
+    }
+
+    // 2. Send Notification to Kredo Admin Team
+    void this.mailService.sendFormNotification(
+      `[New Partner Onboarded] ${dto.tradingName} (${code})`,
+      `<h2>New Referral Partner Registered</h2>
+      <p><strong>Trading Name:</strong> ${dto.tradingName}</p>
+      <p><strong>Primary Contact:</strong> ${dto.primaryContact || 'N/A'}</p>
+      <p><strong>Email:</strong> ${partnerEmail}</p>
+      <p><strong>Phone:</strong> ${partnerPhone}</p>
+      <p><strong>ABN:</strong> ${partnerAbn}</p>
+      <p><strong>Partner Code:</strong> ${code}</p>
+      <p><strong>Partner Tier:</strong> ${dto.partnerType || 'Standard'}</p>
+      <p><strong>Commission Structure:</strong> ${commissionRate}</p>`,
+      `New Partner Registered\nTrading Name: ${dto.tradingName}\nContact: ${dto.primaryContact}\nEmail: ${partnerEmail}\nPhone: ${partnerPhone}\nABN: ${partnerAbn}\nCode: ${code}\nCommission: ${commissionRate}`,
+    );
+
     return {
       ...partner.toObject(),
-      message: 'Partner created',
+      message: 'Partner created and welcome email dispatched',
     };
   }
 
-  async updateMasterPartner(code: string, dto: { name?: string; contactEmail?: string; partnerType?: string; status?: string; phone?: string }) {
+  async updateMasterPartner(code: string, dto: { name?: string; contactEmail?: string; partnerType?: string; status?: string; phone?: string; abn?: string; commissionRate?: string }) {
     const partner = await this.partnerModel.findOne({ code: code.toUpperCase() }).exec();
     if (!partner) {
       throw new NotFoundException(`Partner with code ${code} not found`);
@@ -734,6 +829,8 @@ export class PortalService {
       partner.status = dto.status.toLowerCase() === 'active' ? 'active' : 'paused';
     }
     if (dto.phone !== undefined) partner.phone = dto.phone;
+    if (dto.abn !== undefined) partner.abn = dto.abn;
+    if (dto.commissionRate !== undefined) partner.commissionRate = dto.commissionRate;
 
     await partner.save();
 

@@ -51,22 +51,26 @@ export class MailService {
   }
 
   async sendFormNotification(subject: string, htmlContent: string, textContent: string): Promise<void> {
+    const to = this.config.get<string>('NOTIFICATION_EMAIL')?.trim() || 'kredo@vhmpartners.com.au';
+    await this.sendMailTo(to, subject, htmlContent, textContent);
+  }
+
+  async sendMailTo(to: string, subject: string, htmlContent: string, textContent: string): Promise<void> {
     try {
       const from = this.config.get<string>('SMTP_FROM')?.trim()
         || this.config.get<string>('SMTP_USER')?.trim()
         || 'no-reply@kredo.au';
-      const to = this.config.get<string>('NOTIFICATION_EMAIL')?.trim() || 'kredo@vhmpartners.com.au';
 
       const transporter = this.getTransporter();
       await transporter.sendMail({
-        from: `"Kredo Platform Alerts" <${from}>`,
+        from: `"Kredo Referral Platform" <${from}>`,
         to,
         subject,
         text: textContent,
         html: htmlContent,
       });
     } catch (error) {
-      console.error('Failed to send notification email:', error);
+      console.error(`Failed to send email to ${to}:`, error);
     }
   }
 }

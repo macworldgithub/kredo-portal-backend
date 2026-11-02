@@ -46,6 +46,9 @@ export class Partner {
 
   @Prop({ default: false })
   isHero: boolean;
+
+  @Prop({ default: '1.00%' })
+  commissionRate: string;
 }
 
 export const PartnerSchema = SchemaFactory.createForClass(Partner);
