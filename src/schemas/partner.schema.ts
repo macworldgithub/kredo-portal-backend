@@ -26,6 +26,9 @@ export class Partner {
   @Prop({ default: '062-000' })
   bsb: string;
 
+  @Prop({ default: '' })
+  accountName: string;
+
   @Prop({ default: '48 192 847 219' })
   abn: string;
 

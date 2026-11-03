@@ -634,6 +634,9 @@ export class PortalService {
       phone: partner.phone || '1300 4 KREDO',
       abn: partner.abn || '48 000 000 000',
       commissionRate: partner.commissionRate || '1.00%',
+      bankAccount: partner.bankAccount || '',
+      bsb: partner.bsb || '',
+      accountName: partner.accountName || '',
       avatar: partner.name
         .split(' ')
         .map((part) => part[0])
@@ -748,8 +751,9 @@ export class PortalService {
       partnerType: dto.partnerType || 'Standard',
       contactEmail: partnerEmail,
       phone: partnerPhone,
-      bankAccount: '1098 4421',
-      bsb: '062-000',
+      bankAccount: dto.bankAccount || '',
+      bsb: dto.bsb || '',
+      accountName: dto.accountName || '',
       abn: partnerAbn,
       commissionRate,
       referralLink: `kredo.au/apply?ref=${code}`,
@@ -813,7 +817,7 @@ export class PortalService {
     };
   }
 
-  async updateMasterPartner(code: string, dto: { name?: string; contactEmail?: string; partnerType?: string; status?: string; phone?: string; abn?: string; commissionRate?: string }) {
+  async updateMasterPartner(code: string, dto: { name?: string; contactEmail?: string; partnerType?: string; status?: string; phone?: string; abn?: string; commissionRate?: string; bankAccount?: string; bsb?: string; accountName?: string }) {
     const partner = await this.partnerModel.findOne({ code: code.toUpperCase() }).exec();
     if (!partner) {
       throw new NotFoundException(`Partner with code ${code} not found`);
@@ -831,6 +835,9 @@ export class PortalService {
     if (dto.phone !== undefined) partner.phone = dto.phone;
     if (dto.abn !== undefined) partner.abn = dto.abn;
     if (dto.commissionRate !== undefined) partner.commissionRate = dto.commissionRate;
+    if (dto.bankAccount !== undefined) partner.bankAccount = dto.bankAccount;
+    if (dto.bsb !== undefined) partner.bsb = dto.bsb;
+    if (dto.accountName !== undefined) partner.accountName = dto.accountName;
 
     await partner.save();
 

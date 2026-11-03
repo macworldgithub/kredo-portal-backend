@@ -162,6 +162,18 @@ class UpdateMasterPartnerDto {
   @IsOptional()
   @IsString()
   commissionRate?: string;
+
+  @IsOptional()
+  @IsString()
+  bankAccount?: string;
+
+  @IsOptional()
+  @IsString()
+  bsb?: string;
+
+  @IsOptional()
+  @IsString()
+  accountName?: string;
 }
 
 class CreatePartnerDto {
@@ -193,6 +205,18 @@ class CreatePartnerDto {
   @IsOptional()
   @IsString()
   uniqueCode?: string;
+
+  @IsOptional()
+  @IsString()
+  bankAccount?: string;
+
+  @IsOptional()
+  @IsString()
+  bsb?: string;
+
+  @IsOptional()
+  @IsString()
+  accountName?: string;
 }
 
 class DirectorDetailDto {
