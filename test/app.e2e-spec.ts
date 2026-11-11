@@ -4,12 +4,14 @@ import request from 'supertest';
 import { App } from 'supertest/types.js';
 import { MongoMemoryServer } from 'mongodb-memory-server';
 import { AppModule } from './../src/app.module.js';
+import { vi } from 'vitest';
 import { MailService } from './../src/auth/mail.service.js';
 
 describe('Kredo portal backend (e2e)', () => {
   let app: INestApplication<App>;
   let adminToken: string;
   let mongoServer: MongoMemoryServer;
+  const sendMailTo = vi.fn().mockResolvedValue(undefined);
   let resetCode: string | null = null;
 
   beforeAll(async () => {
@@ -27,6 +29,9 @@ describe('Kredo portal backend (e2e)', () => {
     })
       .overrideProvider(MailService)
       .useValue({
+        sendMailTo,
+        sendFormNotification: async () => undefined,
+        sendWelcomeEmail: async () => undefined,
         assertConfigured: () => undefined,
         sendPasswordResetCode: async (_email: string, code: string) => {
           resetCode = code;
@@ -220,6 +225,78 @@ describe('Kredo portal backend (e2e)', () => {
       .expect(200);
 
     expect(patchRes.body.status).toBe('Approved');
+  });
+
+  it('persists finance, authors, reminders and private status updates', async () => {
+    const login = await request(app.getHttpServer()).post('/api/auth/login')
+      .send({ email: 'partner@kredo.local', password: 'ChangeMe123!' }).expect(200);
+    const partnerAuth = `Bearer ${login.body.accessToken}`;
+    const adminAuth = `Bearer ${adminToken}`;
+    const referral = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+      .set('Authorization', partnerAuth).send({ businessName: 'Portal Changes Test', contactName: 'John', email: 'john@example.test', phone: '0400000000', amount: '$120,000' }).expect(201);
+    const id = referral.body.id;
+    expect(referral.body.commission).toBeUndefined();
+
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
+      .set('Authorization', partnerAuth).send({ lender: 'Shift' }).expect(403);
+    const financed = await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
+      .set('Authorization', adminAuth).send({ lender: 'New Funder', financedAmount: 95000.50 }).expect(200);
+    expect(financed.body.lender).toBe('New Funder');
+    expect(financed.body.financedAmount).toBe(95000.50);
+    expect(financed.body.commission).toBeDefined();
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
+      .set('Authorization', adminAuth).send({ financedAmount: -1 }).expect(400);
+
+    const note = await request(app.getHttpServer()).post(`/api/portal/deals/${id}/notes`)
+      .set('Authorization', adminAuth).send({ author: 'Elin', content: 'Private commentary', isInternal: true }).expect(201);
+    expect(note.body.diaryNotes[0].author).toBe('Elin');
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/notes/${note.body.diaryNotes[0].id}`)
+      .set('Authorization', adminAuth).send({ author: 'Martin', content: 'Updated private commentary', isInternal: true }).expect(200);
+
+    await request(app.getHttpServer()).post(`/api/portal/deals/${id}/reminders`)
+      .set('Authorization', adminAuth).send({ author: 'Craig', comment: 'Call John for bank statements', dueDate: '2026-11-12' }).expect(400);
+    const reminder = await request(app.getHttpServer()).post(`/api/portal/deals/${id}/reminders`)
+      .set('Authorization', adminAuth).send({ author: 'Craig', comment: 'Call John for bank statements', dueDate: '2026-11-12', dueTime: '10:45', dueAt: '2026-11-12T05:45:00.000Z' }).expect(201);
+    expect(reminder.body.followUpReminders[0].dueTime).toBe('10:45');
+    const pipeline = await request(app.getHttpServer()).get('/api/portal/master/pipeline').set('Authorization', adminAuth).expect(200);
+    expect(pipeline.body.find((deal: any) => deal.id === id).followUpReminders).toHaveLength(1);
+    const done = await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/reminders/${reminder.body.followUpReminders[0].id}`)
+      .set('Authorization', adminAuth).send({ completed: true }).expect(200);
+    expect(done.body.followUpReminders[0].completed).toBe(true);
+
+    const profile = await request(app.getHttpServer()).get('/api/portal/profile').set('Authorization', partnerAuth).expect(200);
+    const { name, contactEmail, phone, bankAccount, bsb, abn } = profile.body;
+    const settings = { name, contactEmail, phone, bankAccount, bsb, abn, notificationsEnabled: true, statusUpdateAlerts: false };
+    await request(app.getHttpServer()).patch('/api/portal/settings').set('Authorization', partnerAuth).send(settings).expect(200);
+    sendMailTo.mockClear();
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`).set('Authorization', adminAuth).send({ status: 'Waiting on customer' }).expect(200);
+    expect(sendMailTo).not.toHaveBeenCalled();
+    let detail = await request(app.getHttpServer()).get(`/api/portal/deals/${id}`).set('Authorization', partnerAuth).expect(200);
+    expect(detail.body.statusUpdatedAt).toBeTruthy();
+    expect(detail.body.statusSeenAt).toBeUndefined();
+    expect(detail.body.commission).toBeUndefined();
+    expect(detail.body.diaryNotes).toEqual([]);
+    expect(detail.body.followUpReminders).toBeUndefined();
+    const seen = await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status-seen`).set('Authorization', partnerAuth).expect(200);
+    expect(seen.body.statusSeenAt).toBe(seen.body.statusUpdatedAt);
+    await request(app.getHttpServer()).patch('/api/portal/settings').set('Authorization', partnerAuth).send({ ...settings, statusUpdateAlerts: true }).expect(200);
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`).set('Authorization', adminAuth).send({ status: 'Settled' }).expect(200);
+    expect(sendMailTo).toHaveBeenCalledTimes(1);
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`).set('Authorization', adminAuth).send({ status: 'Settled' }).expect(200);
+    expect(sendMailTo).toHaveBeenCalledTimes(1);
+    const dashboard = await request(app.getHttpServer()).get('/api/portal/dashboard').set('Authorization', partnerAuth).expect(200);
+    expect(dashboard.body.deals.some((deal: any) => deal.id === id)).toBe(true);
+    expect(dashboard.body.stats.totalCommissionsEarned).toBeUndefined();
+    const settled = dashboard.body.deals.filter((deal: any) => deal.status === 'Settled');
+    expect(dashboard.body.stats.convertedAccounts).toBe(settled.length);
+    const total = settled.reduce((sum: number, deal: any) => sum + (deal.financedAmount ?? Number(deal.amount.replace(/[$,]/g, ''))), 0);
+    expect(dashboard.body.stats.totalReferralValue).toBe(`$${total.toLocaleString()}`);
+    expect(dashboard.body.stats.totalReferralValue.startsWith('$')).toBe(true);
+    const listing = await request(app.getHttpServer()).get('/api/portal/deals').set('Authorization', partnerAuth).expect(200);
+    expect(dashboard.body.deals).toHaveLength(listing.body.length);
+    expect(listing.body.every((deal: any) => deal.commission === undefined && deal.diaryNotes.length === 0)).toBe(true);
+    await request(app.getHttpServer()).get('/api/portal/commissions').set('Authorization', partnerAuth).expect(403);
+    await request(app.getHttpServer()).patch('/api/portal/deals/KRD-2842/status-seen').set('Authorization', partnerAuth).expect(404);
   });
 
   it('returns master overview and creates a new partner', async () => {

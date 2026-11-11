@@ -1,6 +1,6 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Type } from 'class-transformer';
-import { IsArray, IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { IsArray, IsBoolean, IsEmail, IsIn, IsNotEmpty, IsNumber, Min, Matches, IsDateString, IsOptional, IsString, ValidateNested } from 'class-validator';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard.js';
 import { Roles } from '../auth/role.decorator.js';
 import { RolesGuard } from '../auth/roles.guard.js';
@@ -57,10 +57,12 @@ class CreateDirectReferralDto {
 class CreateDiaryNoteDto {
   @IsOptional()
   @IsString()
+  @IsIn(['Craig', 'Martin', 'George', 'Anderson', 'Elin'])
   author?: string;
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
   content: string;
 
   @IsOptional()
@@ -111,12 +113,19 @@ class UpdateSettingsDto {
   abn: string;
 
   @IsOptional()
+  @IsBoolean()
   notificationsEnabled?: boolean;
 
   @IsOptional()
+  @IsBoolean()
   settlementAlerts?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  statusUpdateAlerts?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
   marketingEmails?: boolean;
 }
 
@@ -140,25 +149,38 @@ class UpdateDealDto {
   @IsOptional()
   @IsString()
   lender?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  financedAmount?: number;
 }
 
 
 class CreateFollowUpReminderDto {
   @IsString()
   @IsNotEmpty()
+  @IsIn(['Craig', 'Martin', 'George', 'Anderson', 'Elin'])
   author: string;
 
   @IsString()
   @IsNotEmpty()
+  @Matches(/\S/)
   comment: string;
 
   @IsString()
   @IsNotEmpty()
+  @IsDateString({ strict: true })
+  @Matches(/^\d{4}-\d{2}-\d{2}$/)
   dueDate: string;
 
-  @IsOptional()
   @IsString()
-  dueTime?: string;
+  @Matches(/^([01]\d|2[0-3]):[0-5]\d$/)
+  dueTime: string;
+
+  @IsOptional()
+  @IsDateString()
+  dueAt?: string;
 }
 
 class UpdateFollowUpReminderDto {
@@ -387,20 +409,23 @@ export class PortalController {
   }
 
   @Patch('deals/:id/status')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
   async updateDealStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDealStatusDto) {
     return this.portalService.updateDealStatus(req.user, id, dto.status as any, dto.lostReason);
   }
 
   
   @Post('deals/:id/reminders')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
   async addFollowUpReminder(@Req() req: any, @Param('id') id: string, @Body() dto: CreateFollowUpReminderDto) {
     return this.portalService.addFollowUpReminder(req.user, id, dto);
   }
 
   @Patch('deals/:id/reminders/:reminderId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
   async updateFollowUpReminder(
     @Req() req: any,
     @Param('id') id: string,
@@ -411,9 +436,23 @@ export class PortalController {
   }
 
   @Post('deals/:id/notes')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
   async addDiaryNote(@Req() req: any, @Param('id') id: string, @Body() dto: CreateDiaryNoteDto) {
     return this.portalService.addDiaryNote(req.user, id, dto);
+  }
+
+  @Patch('deals/:id/status-seen')
+  @UseGuards(JwtAuthGuard)
+  async markStatusSeen(@Req() req: any, @Param('id') id: string) {
+    return this.portalService.markStatusSeen(req.user, id);
+  }
+
+  @Patch('deals/:id/notes/:noteId')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
+  async updateDiaryNote(@Req() req: any, @Param('id') id: string, @Param('noteId') noteId: string, @Body() dto: CreateDiaryNoteDto) {
+    return this.portalService.updateDiaryNote(req.user, id, noteId, dto);
   }
 
   @Post('deals/direct')
@@ -423,7 +462,8 @@ export class PortalController {
   }
 
   @Get('commissions')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles('master')
   async getCommissions(@Req() req: any) {
     return this.portalService.getCommissions(req.user);
   }

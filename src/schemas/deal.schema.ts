@@ -23,6 +23,7 @@ export interface FollowUpReminder {
   comment: string;
   dueDate: string;
   dueTime?: string;
+  dueAt?: string;
   completed: boolean;
   createdAt: string;
 }
@@ -52,6 +53,9 @@ export class Deal {
 
   @Prop({ required: true, default: 0 })
   amountValue: number;
+
+  @Prop({ type: Number, default: null, min: 0 })
+  financedAmount?: number | null;
 
   @Prop({ required: true })
   type: string;
@@ -106,6 +110,9 @@ export class Deal {
   @Prop({ type: String, default: null, nullable: true })
   statusUpdatedAt?: string | null;
 
+  @Prop({ type: String, default: null })
+  statusSeenAt?: string | null;
+
   @Prop({
     type: [
       {
@@ -114,6 +121,7 @@ export class Deal {
         comment: { type: String, required: true },
         dueDate: { type: String, required: true },
         dueTime: { type: String, default: '' },
+        dueAt: { type: String, default: null },
         completed: { type: Boolean, default: false },
         createdAt: { type: String, required: true },
       },

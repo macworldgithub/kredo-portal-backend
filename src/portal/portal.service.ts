@@ -1,4 +1,5 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
+import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User } from '../auth/user.schema.js';
@@ -25,25 +26,47 @@ export class PortalService {
     return Number(String(value).replace(/[$,]/g, '').replace(/[^\d.-]/g, '')) || 0;
   }
 
-  private mapDeal(doc: any) {
+  private mapDeal(doc: any, user?: any) {
     return {
       id: doc.id,
       name: doc.name,
       applicant: doc.applicant,
       amount: doc.amount,
+      financedAmount: doc.financedAmount ?? undefined,
       type: doc.type,
       status: doc.status,
       lastActivity: doc.lastActivity,
-      commission: doc.commission,
-      commissionStatus: doc.commissionStatus,
+      ...(user?.role === 'master' ? { commission: doc.commission, commissionStatus: doc.commissionStatus } : {}),
       code: doc.code,
       submittedDate: doc.submittedDate,
       lostReason: doc.lostReason ?? undefined,
       lender: doc.lender ?? undefined,
       statusUpdatedAt: doc.statusUpdatedAt ?? undefined,
-      diaryNotes: doc.diaryNotes || [],
-      followUpReminders: doc.followUpReminders || [],
+      statusSeenAt: doc.statusSeenAt ?? undefined,
+      diaryNotes: (doc.diaryNotes || []).filter((note: any) => user?.role === 'master' || !note.isInternal),
+      ...(user?.role === 'master' ? { followUpReminders: doc.followUpReminders || [] } : {}),
     };
+  }
+
+  async markStatusSeen(user: any, id: string) {
+    const query: Record<string, string> = { id };
+    if (user.role === 'partner') query.code = user.partnerCode;
+    const deal = await this.dealModel.findOne(query).exec();
+    if (!deal) throw new NotFoundException('Deal not found');
+    deal.statusSeenAt = deal.statusUpdatedAt || null;
+    await deal.save();
+    return this.mapDeal(deal, user);
+  }
+
+  async updateDiaryNote(user: any, dealId: string, noteId: string, dto: { author?: string; content: string; nextSteps?: string; isInternal?: boolean }) {
+    const deal = await this.dealModel.findOne({ id: dealId }).exec();
+    if (!deal) throw new NotFoundException('Deal not found');
+    const note = deal.diaryNotes.find((item) => item.id === noteId);
+    if (!note) throw new NotFoundException('Diary note not found');
+    Object.assign(note, dto);
+    deal.markModified('diaryNotes');
+    await deal.save();
+    return this.mapDeal(deal, user);
   }
 
   async getPartnerProfile(user: any) {
@@ -112,7 +135,7 @@ export class PortalService {
 
     // Section 4.1: Sales Reporting & Commissions
     const settledDeals = allPartnerDeals.filter((deal) => deal.status === 'Settled');
-    const totalReferralValue = settledDeals.reduce((sum, deal) => sum + (deal.amountValue || this.toNumber(deal.amount)), 0);
+    const totalReferralValue = settledDeals.reduce((sum, deal) => sum + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0);
     const convertedAccounts = settledDeals.length;
 
     const totalCommissionsEarned = allPartnerDeals
@@ -130,12 +153,11 @@ export class PortalService {
         inFlight,
         settled,
         closedLost,
-        totalReferralValue: `${totalReferralValue.toLocaleString()}`,
+        totalReferralValue: `$${totalReferralValue.toLocaleString()}`,
         convertedAccounts,
-        totalCommissionsEarned: `$${totalCommissionsEarned.toLocaleString()}`,
-        estimatedCommission: `$${estimatedCommission.toLocaleString()}`,
+        ...(user.role === 'master' ? { totalCommissionsEarned: `$${totalCommissionsEarned.toLocaleString()}`, estimatedCommission: `$${estimatedCommission.toLocaleString()}` } : {}),
       },
-      deals: deals.slice(0, 6).map((deal) => this.mapDeal(deal)),
+      deals: deals.map((deal) => this.mapDeal(deal, user)),
       referralCode: partner.code,
       referralLink: partner.referralLink,
     };
@@ -186,14 +208,12 @@ export class PortalService {
       submitted: deal.submittedDate,
       stage: deal.status,
       amountBand: deal.amountValue ? `$${Math.round(deal.amountValue / 1000)}k` : deal.amount,
-      commission: deal.commission,
-      commissionStatus:
-        deal.commissionStatus === 'Confirmed' ? 'confirmed' : deal.commissionStatus === 'Paid' ? 'paid' : 'est.',
+      ...(user.role === 'master' ? { commission: deal.commission, commissionStatus: deal.commissionStatus === 'Confirmed' ? 'confirmed' : deal.commissionStatus === 'Paid' ? 'paid' : 'est.' } : {}),
       rule: deal.type,
       facility: deal.amount,
       partner: deal.code,
       lostReason: deal.lostReason ?? undefined,
-      diaryNotes: deal.diaryNotes || [],
+      diaryNotes: (deal.diaryNotes || []).filter((note) => user.role === 'master' || !note.isInternal),
     }));
   }
 
@@ -204,12 +224,16 @@ export class PortalService {
     if (!deal) {
       throw new NotFoundException('Deal not found');
     }
-    return this.mapDeal(deal);
+    return this.mapDeal(deal, user);
   }
 
   async updateDealStatus(user: any, id: string, status: DealStatus, lostReason?: string) {
     const query: Record<string, string> = { id };
     if (user.role === 'partner') query.code = user.partnerCode;
+
+    const previous = await this.dealModel.findOne(query).lean();
+    if (!previous) throw new NotFoundException('Deal not found');
+    if (previous.status === status) return this.mapDeal(previous, user);
 
     const updatePayload: Record<string, any> = {
       status,
@@ -256,10 +280,10 @@ export class PortalService {
       }
     }
 
-    return this.mapDeal(updated);
+    return this.mapDeal(updated, user);
   }
 
-  async updateDeal(user: any, id: string, dto: { name?: string; applicant?: string; amount?: string; type?: string; lender?: string }) {
+  async updateDeal(user: any, id: string, dto: { name?: string; applicant?: string; amount?: string; type?: string; lender?: string; financedAmount?: number }) {
     const query: Record<string, string> = { id };
     if (user.role === 'partner') query.code = user.partnerCode;
 
@@ -268,7 +292,14 @@ export class PortalService {
       throw new NotFoundException('Deal not found');
     }
 
+    if (user.role !== 'master' && (dto.lender !== undefined || dto.financedAmount !== undefined)) {
+      throw new ForbiddenException('Finance fields are restricted to administrators');
+    }
     const changes: string[] = [];
+    if (dto.financedAmount !== undefined && dto.financedAmount !== deal.financedAmount) {
+      changes.push(`Amount financed: ${dto.financedAmount}`);
+      deal.financedAmount = dto.financedAmount;
+    }
     if (dto.lender !== undefined && dto.lender !== deal.lender) {
       changes.push(`Lender: "${deal.lender || 'None'}" -> "${dto.lender}"`);
       deal.lender = dto.lender;
@@ -297,7 +328,7 @@ export class PortalService {
     if (changes.length > 0) {
       deal.lastActivity = 'Deal details edited';
       deal.diaryNotes.unshift({
-        id: `NOTE-${Date.now().toString().slice(-6)}`,
+        id: `NOTE-${randomUUID()}`,
         author: user.name || (user.role === 'master' ? 'Kredo Staff' : 'Partner'),
         content: `Lead updated: ${changes.join(', ')}`,
         isInternal: true,
@@ -312,7 +343,7 @@ export class PortalService {
       await deal.save();
     }
 
-    return this.mapDeal(deal);
+    return this.mapDeal(deal, user);
   }
 
   async addDiaryNote(user: any, dealId: string, dto: { content: string; nextSteps?: string; isInternal?: boolean; author?: string }) {
@@ -325,7 +356,7 @@ export class PortalService {
     }
 
     const newNote = {
-      id: `NOTE-${Date.now().toString().slice(-6)}`,
+      id: `NOTE-${randomUUID()}`,
       author: dto.author || user.name || (user.role === 'master' ? 'Craig' : 'Partner'),
       content: dto.content,
       nextSteps: dto.nextSteps,
@@ -343,11 +374,11 @@ export class PortalService {
     deal.lastActivity = 'Note added just now';
     await deal.save();
 
-    return this.mapDeal(deal);
+    return this.mapDeal(deal, user);
   }
 
   
-  async addFollowUpReminder(user: any, dealId: string, dto: { author: string; comment: string; dueDate: string; dueTime?: string }) {
+  async addFollowUpReminder(user: any, dealId: string, dto: { author: string; comment: string; dueDate: string; dueTime: string; dueAt?: string }) {
     const query: Record<string, string> = { id: dealId };
     if (user.role === 'partner') query.code = user.partnerCode;
 
@@ -357,11 +388,12 @@ export class PortalService {
     }
 
     const newReminder = {
-      id: `REM-${Date.now().toString().slice(-6)}`,
+      id: `REM-${randomUUID()}`,
       author: dto.author || user.name || 'Craig',
       comment: dto.comment,
       dueDate: dto.dueDate,
-      dueTime: dto.dueTime || '',
+      dueTime: dto.dueTime,
+      dueAt: dto.dueAt,
       completed: false,
       createdAt: new Date().toLocaleString('en-AU', {
         day: 'numeric',
@@ -379,7 +411,7 @@ export class PortalService {
     deal.lastActivity = 'Follow-up scheduled';
     await deal.save();
 
-    return this.mapDeal(deal);
+    return this.mapDeal(deal, user);
   }
 
   async updateFollowUpReminder(user: any, dealId: string, reminderId: string, completed: boolean) {
@@ -400,7 +432,7 @@ export class PortalService {
     deal.markModified('followUpReminders');
     await deal.save();
 
-    return this.mapDeal(deal);
+    return this.mapDeal(deal, user);
   }
 
   async updateCommission(id: string, dto: { status?: 'Confirmed' | 'Paid' | 'Processing'; commissionAmount?: string; paidDate?: string; rate?: string }) {
@@ -455,7 +487,7 @@ export class PortalService {
       source: 'direct',
       diaryNotes: [
         {
-          id: `NOTE-${Date.now().toString().slice(-6)}`,
+          id: `NOTE-${randomUUID()}`,
           author: user.name || 'Partner',
           content: 'Direct introduction submitted via Partner Portal.',
           isInternal: true,
@@ -480,7 +512,7 @@ export class PortalService {
       `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}`,
     );
 
-    return this.mapDeal(created);
+    return this.mapDeal(created, user);
   }
 
   async createApplication(dto: any) {
@@ -519,7 +551,7 @@ export class PortalService {
       source: dto.referralCode ? 'hero' : 'partner',
       diaryNotes: [
         {
-          id: `NOTE-${Date.now().toString().slice(-6)}`,
+          id: `NOTE-${randomUUID()}`,
           author: 'Online Portal Application',
           content: `Application received for ${dto.tradingName} (ABN: ${dto.abn || 'N/A'}). Direct contact: ${dto.directorName} (${dto.phone}).`,
           nextSteps: 'Assign credit analyst and initiate loan assessment.',
@@ -581,7 +613,8 @@ export class PortalService {
   }
 
   async getCommissions(user: any) {
-    const query = user.role === 'partner' ? { partnerCode: user.partnerCode } : {};
+    if (user.role !== 'master') throw new ForbiddenException('Commission reporting is restricted to administrators');
+    const query = {};
     const rows = await this.commissionModel.find(query).sort({ createdAt: -1 }).lean();
     return rows.map((row) => ({
       id: row.dealId,
@@ -636,7 +669,7 @@ export class PortalService {
     ).length;
 
     const settledDealsList = deals.filter((deal) => deal.status === 'Settled');
-    const totalAmountFinanced = settledDealsList.reduce((sum, deal) => sum + (deal.amountValue || this.toNumber(deal.amount)), 0);
+    const totalAmountFinanced = settledDealsList.reduce((sum, deal) => sum + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0);
     const totalAccountsFinanced = settledDealsList.length;
 
     const commissionTotal = deals.reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
@@ -649,7 +682,7 @@ export class PortalService {
           name: partner.name,
           code: partner.code,
           deals: partnerDeals.length,
-          settledVolume: settledDeals.reduce((total, deal) => total + (deal.amountValue || 0), 0),
+          settledVolume: settledDeals.reduce((total, deal) => total + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0),
         };
       })
       .sort((left, right) => right.settledVolume - left.settledVolume);
@@ -669,7 +702,7 @@ export class PortalService {
         settledThisMonth: settledMonth,
         closedLostDeals: closedLostCount,
         commissionAccrued: `${commissionTotal.toLocaleString()}`,
-        totalAmountFinanced: `${totalAmountFinanced.toLocaleString()}`,
+        totalAmountFinanced: `$${totalAmountFinanced.toLocaleString()}`,
         totalAccountsFinanced,
       },
       funnel: {
@@ -714,6 +747,7 @@ export class PortalService {
       commission: deal.commission,
       lostReason: deal.lostReason ?? undefined,
       diaryNotes: deal.diaryNotes || [],
+      followUpReminders: deal.followUpReminders || [],
     }));
   }
 
@@ -732,7 +766,7 @@ export class PortalService {
       deals: deals.filter((deal) => deal.code === partner.code).length,
       settled: `$${deals
         .filter((deal) => deal.code === partner.code && deal.status === 'Settled')
-        .reduce((total, deal) => total + (deal.amountValue || 0), 0)
+        .reduce((total, deal) => total + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0)
         .toLocaleString()}`,
       status: partner.status === 'active' ? 'Active' : 'Paused',
       phone: partner.phone || '1300 4 KREDO',
@@ -774,7 +808,7 @@ export class PortalService {
         name: partner.name,
         settledVolume: deals
           .filter((deal) => deal.code === partner.code && deal.status === 'Settled')
-          .reduce((total, deal) => total + (deal.amountValue || 0), 0),
+          .reduce((total, deal) => total + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0),
       }))
       .sort((left, right) => right.settledVolume - left.settledVolume);
     const maxVolume = partnerPerformance[0]?.settledVolume || 0;
