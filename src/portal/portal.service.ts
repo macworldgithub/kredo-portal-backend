@@ -39,7 +39,10 @@ export class PortalService {
       code: doc.code,
       submittedDate: doc.submittedDate,
       lostReason: doc.lostReason ?? undefined,
+      lender: doc.lender ?? undefined,
+      statusUpdatedAt: doc.statusUpdatedAt ?? undefined,
       diaryNotes: doc.diaryNotes || [],
+      followUpReminders: doc.followUpReminders || [],
     };
   }
 
@@ -62,6 +65,7 @@ export class PortalService {
       referralLink: partner.referralLink,
       notificationsEnabled: partner.notificationsEnabled,
       settlementAlerts: partner.settlementAlerts,
+      statusUpdateAlerts: partner.statusUpdateAlerts ?? true,
       marketingEmails: partner.marketingEmails,
     };
   }
@@ -106,7 +110,11 @@ export class PortalService {
 
     const allPartnerDeals = await this.dealModel.find({ code: partner.code }).lean();
 
-    // Section 4.1: Total commissions earned
+    // Section 4.1: Sales Reporting & Commissions
+    const settledDeals = allPartnerDeals.filter((deal) => deal.status === 'Settled');
+    const totalReferralValue = settledDeals.reduce((sum, deal) => sum + (deal.amountValue || this.toNumber(deal.amount)), 0);
+    const convertedAccounts = settledDeals.length;
+
     const totalCommissionsEarned = allPartnerDeals
       .filter((deal) => deal.commissionStatus === 'Confirmed' || deal.commissionStatus === 'Paid')
       .reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
@@ -122,6 +130,8 @@ export class PortalService {
         inFlight,
         settled,
         closedLost,
+        totalReferralValue: `${totalReferralValue.toLocaleString()}`,
+        convertedAccounts,
         totalCommissionsEarned: `$${totalCommissionsEarned.toLocaleString()}`,
         estimatedCommission: `$${estimatedCommission.toLocaleString()}`,
       },
@@ -204,6 +214,7 @@ export class PortalService {
     const updatePayload: Record<string, any> = {
       status,
       lastActivity: 'Updated just now',
+      statusUpdatedAt: new Date().toISOString(),
     };
     if (lostReason !== undefined) {
       updatePayload.lostReason = lostReason;
@@ -219,10 +230,36 @@ export class PortalService {
       throw new NotFoundException('Deal not found');
     }
 
+    // Agent Portal - Notifications for Application Status Updates (Change #3)
+    if (updated.code) {
+      const partner = await this.partnerModel.findOne({ code: updated.code }).exec();
+      if (partner && partner.contactEmail && (partner.statusUpdateAlerts !== false) && (partner.notificationsEnabled !== false)) {
+        const subject = `[Kredo Update] ${updated.name} status changed to ${status}`;
+        const html = `
+          <div style="font-family: Arial, sans-serif; color: #1e293b; max-width: 600px; margin: 0 auto; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px;">
+            <h2 style="color: #0a1926; margin-top: 0;">Application Status Update</h2>
+            <p>Dear ${partner.name},</p>
+            <p>The status of your referred client <strong>${updated.name}</strong> (${updated.applicant}) has been updated:</p>
+            <div style="background-color: #f8fafc; border-left: 4px solid #0284c7; padding: 16px; border-radius: 6px; margin: 20px 0;">
+              <p style="margin: 0; font-size: 15px;">New Stage: <strong style="color: #0a1926;">${status}</strong></p>
+              ${lostReason ? `<p style="margin: 8px 0 0; color: #dc2626; font-size: 13px;">Reason: ${lostReason}</p>` : ''}
+              <p style="margin: 8px 0 0; font-size: 13px; color: #64748b;">Facility: ${updated.amount} (${updated.type})</p>
+            </div>
+            <p>Please log in to your Kredo Partner Portal to review progress and notes.</p>
+            <p style="margin-top: 24px; font-size: 12px; color: #94a3b8;">Kredo Referral Operations</p>
+          </div>
+        `;
+        const plainText = `Application Status Update: ${updated.name} is now ${status}. Facility: ${updated.amount}. Please log in to your Kredo Partner Portal.`;
+        void this.mailService.sendMailTo(partner.contactEmail, subject, html, plainText).catch((err) => {
+          console.error('Failed to send status update email to partner:', err);
+        });
+      }
+    }
+
     return this.mapDeal(updated);
   }
 
-  async updateDeal(user: any, id: string, dto: { name?: string; applicant?: string; amount?: string; type?: string }) {
+  async updateDeal(user: any, id: string, dto: { name?: string; applicant?: string; amount?: string; type?: string; lender?: string }) {
     const query: Record<string, string> = { id };
     if (user.role === 'partner') query.code = user.partnerCode;
 
@@ -232,6 +269,10 @@ export class PortalService {
     }
 
     const changes: string[] = [];
+    if (dto.lender !== undefined && dto.lender !== deal.lender) {
+      changes.push(`Lender: "${deal.lender || 'None'}" -> "${dto.lender}"`);
+      deal.lender = dto.lender;
+    }
     if (dto.name && dto.name !== deal.name) {
       changes.push(`Business: "${deal.name}" -> "${dto.name}"`);
       deal.name = dto.name;
@@ -274,7 +315,7 @@ export class PortalService {
     return this.mapDeal(deal);
   }
 
-  async addDiaryNote(user: any, dealId: string, dto: { content: string; nextSteps?: string; isInternal?: boolean }) {
+  async addDiaryNote(user: any, dealId: string, dto: { content: string; nextSteps?: string; isInternal?: boolean; author?: string }) {
     const query: Record<string, string> = { id: dealId };
     if (user.role === 'partner') query.code = user.partnerCode;
 
@@ -285,7 +326,7 @@ export class PortalService {
 
     const newNote = {
       id: `NOTE-${Date.now().toString().slice(-6)}`,
-      author: user.name || (user.role === 'master' ? 'Kredo Staff' : 'Partner'),
+      author: dto.author || user.name || (user.role === 'master' ? 'Craig' : 'Partner'),
       content: dto.content,
       nextSteps: dto.nextSteps,
       isInternal: dto.isInternal !== undefined ? dto.isInternal : true,
@@ -300,6 +341,63 @@ export class PortalService {
 
     deal.diaryNotes.unshift(newNote);
     deal.lastActivity = 'Note added just now';
+    await deal.save();
+
+    return this.mapDeal(deal);
+  }
+
+  
+  async addFollowUpReminder(user: any, dealId: string, dto: { author: string; comment: string; dueDate: string; dueTime?: string }) {
+    const query: Record<string, string> = { id: dealId };
+    if (user.role === 'partner') query.code = user.partnerCode;
+
+    const deal = await this.dealModel.findOne(query).exec();
+    if (!deal) {
+      throw new NotFoundException('Deal not found');
+    }
+
+    const newReminder = {
+      id: `REM-${Date.now().toString().slice(-6)}`,
+      author: dto.author || user.name || 'Craig',
+      comment: dto.comment,
+      dueDate: dto.dueDate,
+      dueTime: dto.dueTime || '',
+      completed: false,
+      createdAt: new Date().toLocaleString('en-AU', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      }),
+    };
+
+    if (!deal.followUpReminders) {
+      deal.followUpReminders = [];
+    }
+    deal.followUpReminders.unshift(newReminder);
+    deal.lastActivity = 'Follow-up scheduled';
+    await deal.save();
+
+    return this.mapDeal(deal);
+  }
+
+  async updateFollowUpReminder(user: any, dealId: string, reminderId: string, completed: boolean) {
+    const query: Record<string, string> = { id: dealId };
+    if (user.role === 'partner') query.code = user.partnerCode;
+
+    const deal = await this.dealModel.findOne(query).exec();
+    if (!deal) {
+      throw new NotFoundException('Deal not found');
+    }
+
+    const reminder = deal.followUpReminders?.find((r) => r.id === reminderId);
+    if (!reminder) {
+      throw new NotFoundException('Reminder not found');
+    }
+
+    reminder.completed = completed;
+    deal.markModified('followUpReminders');
     await deal.save();
 
     return this.mapDeal(deal);
@@ -537,6 +635,10 @@ export class PortalService {
       ['Closed Lost', 'Declined', 'Declined / withdrawn'].includes(deal.status),
     ).length;
 
+    const settledDealsList = deals.filter((deal) => deal.status === 'Settled');
+    const totalAmountFinanced = settledDealsList.reduce((sum, deal) => sum + (deal.amountValue || this.toNumber(deal.amount)), 0);
+    const totalAccountsFinanced = settledDealsList.length;
+
     const commissionTotal = deals.reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
 
     const partnerPerformance = partners
@@ -566,7 +668,9 @@ export class PortalService {
         inFlightDeals: inFlight,
         settledThisMonth: settledMonth,
         closedLostDeals: closedLostCount,
-        commissionAccrued: `$${commissionTotal.toLocaleString()}`,
+        commissionAccrued: `${commissionTotal.toLocaleString()}`,
+        totalAmountFinanced: `${totalAmountFinanced.toLocaleString()}`,
+        totalAccountsFinanced,
       },
       funnel: {
         referred: totalDeals,
@@ -721,6 +825,7 @@ export class PortalService {
         abn: dto.abn,
         notificationsEnabled: dto.notificationsEnabled,
         settlementAlerts: dto.settlementAlerts,
+        statusUpdateAlerts: dto.statusUpdateAlerts,
         marketingEmails: dto.marketingEmails,
       },
       { returnDocument: 'after' },

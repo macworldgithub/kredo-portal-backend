@@ -55,6 +55,10 @@ class CreateDirectReferralDto {
 }
 
 class CreateDiaryNoteDto {
+  @IsOptional()
+  @IsString()
+  author?: string;
+
   @IsString()
   @IsNotEmpty()
   content: string;
@@ -132,6 +136,35 @@ class UpdateDealDto {
   @IsOptional()
   @IsString()
   type?: string;
+
+  @IsOptional()
+  @IsString()
+  lender?: string;
+}
+
+
+class CreateFollowUpReminderDto {
+  @IsString()
+  @IsNotEmpty()
+  author: string;
+
+  @IsString()
+  @IsNotEmpty()
+  comment: string;
+
+  @IsString()
+  @IsNotEmpty()
+  dueDate: string;
+
+  @IsOptional()
+  @IsString()
+  dueTime?: string;
+}
+
+class UpdateFollowUpReminderDto {
+  @IsOptional()
+  @IsBoolean()
+  completed?: boolean;
 }
 
 class UpdateMasterPartnerDto {
@@ -357,6 +390,24 @@ export class PortalController {
   @UseGuards(JwtAuthGuard)
   async updateDealStatus(@Req() req: any, @Param('id') id: string, @Body() dto: UpdateDealStatusDto) {
     return this.portalService.updateDealStatus(req.user, id, dto.status as any, dto.lostReason);
+  }
+
+  
+  @Post('deals/:id/reminders')
+  @UseGuards(JwtAuthGuard)
+  async addFollowUpReminder(@Req() req: any, @Param('id') id: string, @Body() dto: CreateFollowUpReminderDto) {
+    return this.portalService.addFollowUpReminder(req.user, id, dto);
+  }
+
+  @Patch('deals/:id/reminders/:reminderId')
+  @UseGuards(JwtAuthGuard)
+  async updateFollowUpReminder(
+    @Req() req: any,
+    @Param('id') id: string,
+    @Param('reminderId') reminderId: string,
+    @Body() dto: UpdateFollowUpReminderDto,
+  ) {
+    return this.portalService.updateFollowUpReminder(req.user, id, reminderId, dto.completed ?? true);
   }
 
   @Post('deals/:id/notes')

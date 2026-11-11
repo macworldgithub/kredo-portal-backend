@@ -41,6 +41,9 @@ export class Partner {
   @Prop({ default: true })
   settlementAlerts: boolean;
 
+  @Prop({ default: true })
+  statusUpdateAlerts: boolean;
+
   @Prop({ default: false })
   marketingEmails: boolean;
 

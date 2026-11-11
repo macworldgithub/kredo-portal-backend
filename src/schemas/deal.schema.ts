@@ -17,6 +17,16 @@ export type DealStatus =
 
 export type CommissionStatus = 'Estimated' | 'Confirmed' | 'Paid';
 
+export interface FollowUpReminder {
+  id: string;
+  author: string;
+  comment: string;
+  dueDate: string;
+  dueTime?: string;
+  completed: boolean;
+  createdAt: string;
+}
+
 export interface DiaryNote {
   id: string;
   author: string;
@@ -89,6 +99,28 @@ export class Deal {
 
   @Prop({ type: String, default: null, nullable: true })
   lostReason?: string | null;
+
+  @Prop({ type: String, default: null, nullable: true })
+  lender?: string | null;
+
+  @Prop({ type: String, default: null, nullable: true })
+  statusUpdatedAt?: string | null;
+
+  @Prop({
+    type: [
+      {
+        id: { type: String, required: true },
+        author: { type: String, required: true },
+        comment: { type: String, required: true },
+        dueDate: { type: String, required: true },
+        dueTime: { type: String, default: '' },
+        completed: { type: Boolean, default: false },
+        createdAt: { type: String, required: true },
+      },
+    ],
+    default: [],
+  })
+  followUpReminders: FollowUpReminder[];
 
   @Prop({
     type: [

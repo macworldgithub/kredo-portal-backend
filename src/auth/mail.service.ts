@@ -55,7 +55,7 @@ export class MailService {
     await this.sendMailTo(to, subject, htmlContent, textContent);
   }
 
-  async sendMailTo(to: string, subject: string, htmlContent: string, textContent: string): Promise<void> {
+  async sendMailTo(to: string, subject: string, htmlContent: string, textContent?: string): Promise<void> {
     try {
       const from = this.config.get<string>('SMTP_FROM')?.trim()
         || this.config.get<string>('SMTP_USER')?.trim()
@@ -66,7 +66,7 @@ export class MailService {
         from: `"Kredo Referral Platform" <${from}>`,
         to,
         subject,
-        text: textContent,
+        text: textContent || htmlContent.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim(),
         html: htmlContent,
       });
     } catch (error) {
