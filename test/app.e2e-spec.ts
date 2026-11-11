@@ -6,6 +6,9 @@ import { MongoMemoryServer } from 'mongodb-memory-server';
 import { AppModule } from './../src/app.module.js';
 import { vi } from 'vitest';
 import { MailService } from './../src/auth/mail.service.js';
+import { getModelToken } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { Commission } from './../src/schemas/commission.schema.js';
 
 describe('Kredo portal backend (e2e)', () => {
   let app: INestApplication<App>;
@@ -297,6 +300,91 @@ describe('Kredo portal backend (e2e)', () => {
     expect(listing.body.every((deal: any) => deal.commission === undefined && deal.diaryNotes.length === 0)).toBe(true);
     await request(app.getHttpServer()).get('/api/portal/commissions').set('Authorization', partnerAuth).expect(403);
     await request(app.getHttpServer()).patch('/api/portal/deals/KRD-2842/status-seen').set('Authorization', partnerAuth).expect(404);
+  });
+
+  it('preserves zero and decimal referral amounts and rejects malformed amounts', async () => {
+    const authorization = `Bearer ${adminToken}`;
+    const referral = {
+      businessName: 'Amount Regression Test', contactName: 'John',
+      email: 'john@example.test', phone: '0400000000', referralCode: 'HAYES01',
+    };
+    for (const amount of ['', '$0', '$1,000.50']) {
+      const created = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+        .set('Authorization', authorization).send({ ...referral, amount }).expect(201);
+      expect(created.body.amount).toBe(amount === '$1,000.50' ? '$1,000.50' : '$0');
+      const edited = await request(app.getHttpServer()).patch(`/api/portal/deals/${created.body.id}`)
+        .set('Authorization', authorization).send({ amount: '$2,000.25' }).expect(200);
+      expect(edited.body.amount).toBe('$2,000.25');
+      const zero = await request(app.getHttpServer()).patch(`/api/portal/deals/${created.body.id}`)
+        .set('Authorization', authorization).send({ amount: '$0' }).expect(200);
+      expect(zero.body.amount).toBe('$0');
+    }
+    for (const amount of ['-1', '$12abc', '$1,00', '$1.234']) {
+      await request(app.getHttpServer()).post('/api/portal/deals/direct')
+        .set('Authorization', authorization).send({ ...referral, amount }).expect(400);
+    }
+  });
+
+  it('creates a settlement ledger entry, preserves adjustments on retries, and repairs missing entries', async () => {
+    const authorization = `Bearer ${adminToken}`;
+    const created = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+      .set('Authorization', authorization).send({
+        businessName: 'Ledger Regression Test', contactName: 'John', email: 'john@example.test',
+        phone: '0400000000', amount: '$120,000', referralCode: 'HAYES01',
+      }).expect(201);
+    const id = created.body.id;
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
+      .set('Authorization', authorization).send({ financedAmount: 95000.5 }).expect(200);
+    const settled = await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`)
+      .set('Authorization', authorization).send({ status: 'Settled' }).expect(200);
+    expect(settled.body.commissionStatus).toBe('Confirmed');
+    const ledger = await request(app.getHttpServer()).get('/api/portal/commissions')
+      .set('Authorization', authorization).expect(200);
+    expect(ledger.body.find((row: any) => row.dealId === id)).toMatchObject({
+      settledAmount: '$95,000.50', commissionAmount: '$1,200', status: 'Confirmed',
+    });
+    const before = await request(app.getHttpServer()).get('/api/portal/master/overview')
+      .set('Authorization', authorization).expect(200);
+    await request(app.getHttpServer()).patch(`/api/portal/commissions/${id}`)
+      .set('Authorization', authorization).send({ commissionAmount: '$777.25', status: 'Paid' }).expect(200);
+    const detail = await request(app.getHttpServer()).get(`/api/portal/deals/${id}`)
+      .set('Authorization', authorization).expect(200);
+    expect(detail.body.commission).toBe('$777.25');
+    expect(detail.body.commissionStatus).toBe('Paid');
+    const after = await request(app.getHttpServer()).get('/api/portal/master/overview')
+      .set('Authorization', authorization).expect(200);
+    const toNumber = (value: string) => Number(value.replace(/[$,]/g, ''));
+    expect(toNumber(before.body.stats.commissionAccrued) - toNumber(after.body.stats.commissionAccrued)).toBeCloseTo(422.75);
+    // Retrying settlement and changing facility details must preserve a paid adjustment.
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`)
+      .set('Authorization', authorization).send({ status: 'Settled' }).expect(200);
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
+      .set('Authorization', authorization).send({ amount: '$130,000', financedAmount: 90000 }).expect(200);
+    const retried = await request(app.getHttpServer()).get('/api/portal/commissions')
+      .set('Authorization', authorization).expect(200);
+    const entries = retried.body.filter((row: any) => row.dealId === id);
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ settledAmount: '$90,000', commissionAmount: '$777.25', status: 'Paid' });
+    expect(entries[0].paidDate).toBeTruthy();
+
+    const commissions = app.get<Model<Commission>>(getModelToken(Commission.name));
+    await commissions.deleteOne({ dealId: id });
+    const repaired = await request(app.getHttpServer()).get('/api/portal/commissions')
+      .set('Authorization', authorization).expect(200);
+    expect(repaired.body.find((row: any) => row.dealId === id)).toMatchObject({
+      commissionAmount: '$777.25', status: 'Paid', settledAmount: '$90,000',
+    });
+  });
+
+  it('uses the lower bound of an application amount band', async () => {
+    await request(app.getHttpServer()).post('/api/portal/applications').send({
+      tradingName: 'Amount Band Regression Test', abn: '51824753556', amount: '$50,000 \u2013 $100,000',
+      purpose: 'Cashflow assistance', directorName: 'John', email: 'john@example.test',
+      phone: '0400000000', referralCode: 'HAYES01',
+    }).expect(201);
+    const pipeline = await request(app.getHttpServer()).get('/api/portal/master/pipeline')
+      .set('Authorization', `Bearer ${adminToken}`).expect(200);
+    expect(pipeline.body.find((deal: any) => deal.name === 'Amount Band Regression Test').commission).toBe('$500');
   });
 
   it('returns master overview and creates a new partner', async () => {

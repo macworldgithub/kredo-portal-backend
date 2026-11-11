@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
+import { Injectable, NotFoundException, ForbiddenException, BadRequestException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { User } from '../auth/user.schema.js';
@@ -24,6 +24,62 @@ export class PortalService {
 
   private toNumber(value: string): number {
     return Number(String(value).replace(/[$,]/g, '').replace(/[^\d.-]/g, '')) || 0;
+  }
+
+  private parseAmount(value: string): number {
+    const normalized = value.trim().replace(/^\$\s*/, '');
+    if (!/^(?:\d+|\d{1,3}(?:,\d{3})+)(?:\.\d{1,2})?$/.test(normalized)) {
+      throw new BadRequestException('Enter a non-negative dollar amount with up to two decimal places');
+    }
+    const amount = Number(normalized.replaceAll(',', ''));
+    if (!Number.isFinite(amount) || amount > Number.MAX_SAFE_INTEGER / 100) {
+      throw new BadRequestException('Amount is too large');
+    }
+    return amount;
+  }
+
+  private formatAmount(amount: number): string {
+    return `$${amount.toLocaleString('en-AU', {
+      minimumFractionDigits: Number.isInteger(amount) ? 0 : 2,
+      maximumFractionDigits: 2,
+    })}`;
+  }
+
+  private async syncCommissionToDeal(commission: Commission) {
+    const status = commission.status === 'Processing' ? 'Estimated' : commission.status;
+    await this.dealModel.updateOne(
+      { id: commission.dealId },
+      { $set: { commission: commission.commissionAmount, commissionStatus: status } },
+    );
+  }
+
+  private async ensureCommission(deal: Deal) {
+    const financedAmount = deal.financedAmount ?? deal.amountValue;
+    const commissionValue = this.toNumber(deal.commission);
+    const rate = financedAmount > 0 ? (commissionValue / financedAmount) * 100 : 0;
+    const commission = await this.commissionModel.findOneAndUpdate(
+      { dealId: deal.id },
+      {
+        $set: {
+          dealName: deal.name,
+          client: deal.applicant,
+          settledAmount: this.formatAmount(financedAmount),
+          partnerCode: deal.code,
+        },
+        $setOnInsert: {
+          dealId: deal.id,
+          rate: `${rate.toFixed(2)}%`,
+          commissionAmount: deal.commission,
+          status: deal.commissionStatus === 'Paid' ? 'Paid' : 'Confirmed',
+        },
+      },
+      { upsert: deal.status === 'Settled', returnDocument: 'after', runValidators: true },
+    );
+    if (commission) {
+      await this.syncCommissionToDeal(commission);
+      deal.commission = commission.commissionAmount;
+      deal.commissionStatus = commission.status === 'Processing' ? 'Estimated' : commission.status;
+    }
   }
 
   private mapDeal(doc: any, user?: any) {
@@ -233,7 +289,10 @@ export class PortalService {
 
     const previous = await this.dealModel.findOne(query).lean();
     if (!previous) throw new NotFoundException('Deal not found');
-    if (previous.status === status) return this.mapDeal(previous, user);
+    if (previous.status === status) {
+      if (status === 'Settled') await this.ensureCommission(previous);
+      return this.mapDeal(previous, user);
+    }
 
     const updatePayload: Record<string, any> = {
       status,
@@ -253,6 +312,8 @@ export class PortalService {
     if (!updated) {
       throw new NotFoundException('Deal not found');
     }
+
+    if (status === 'Settled') await this.ensureCommission(updated);
 
     // Agent Portal - Notifications for Application Status Updates (Change #3)
     if (updated.code) {
@@ -312,13 +373,13 @@ export class PortalService {
       changes.push(`Contact: "${deal.applicant}" -> "${dto.applicant}"`);
       deal.applicant = dto.applicant;
     }
-    if (dto.amount && dto.amount !== deal.amount) {
+    if (dto.amount !== undefined && dto.amount !== deal.amount) {
       changes.push(`Amount: "${deal.amount}" -> "${dto.amount}"`);
-      const parsedAmount = Number(String(dto.amount).replace(/[^\d]/g, '')) || deal.amountValue;
-      deal.amount = dto.amount.startsWith('$') ? dto.amount : `$${Number(parsedAmount).toLocaleString()}`;
+      const parsedAmount = this.parseAmount(dto.amount);
+      deal.amount = this.formatAmount(parsedAmount);
       deal.amountValue = parsedAmount;
-      const commissionValue = Math.round(parsedAmount * 0.01);
-      deal.commission = `$${commissionValue.toLocaleString()}`;
+      const commissionValue = Math.round(parsedAmount) / 100;
+      deal.commission = this.formatAmount(commissionValue);
     }
     if (dto.type && dto.type !== deal.type) {
       changes.push(`Facility Type: "${deal.type}" -> "${dto.type}"`);
@@ -341,6 +402,7 @@ export class PortalService {
         }),
       });
       await deal.save();
+      await this.ensureCommission(deal);
     }
 
     return this.mapDeal(deal, user);
@@ -436,51 +498,45 @@ export class PortalService {
   }
 
   async updateCommission(id: string, dto: { status?: 'Confirmed' | 'Paid' | 'Processing'; commissionAmount?: string; paidDate?: string; rate?: string }) {
-    const commission = await this.commissionModel.findOne({ dealId: id }).exec();
+    const deal = await this.dealModel.findOne({ id }).lean();
+    if (deal?.status === 'Settled') await this.ensureCommission(deal);
+    const updates: Record<string, string | null> = {};
+    if (dto.status !== undefined) updates.status = dto.status;
+    if (dto.commissionAmount !== undefined) {
+      updates.commissionAmount = this.formatAmount(this.parseAmount(dto.commissionAmount));
+    }
+    if (dto.rate !== undefined) updates.rate = dto.rate;
+    if (dto.paidDate !== undefined) updates.paidDate = dto.paidDate;
+    if (dto.status === 'Paid' && !dto.paidDate) {
+      const existing = await this.commissionModel.findOne({ dealId: id }).lean();
+      updates.paidDate = existing?.paidDate || new Date().toLocaleDateString('en-AU', {
+        day: 'numeric', month: 'short', year: 'numeric',
+      });
+    }
+    const commission = await this.commissionModel.findOneAndUpdate(
+      { dealId: id }, { $set: updates }, { returnDocument: 'after', runValidators: true },
+    );
     if (!commission) {
       throw new NotFoundException('Commission record not found');
     }
-
-    if (dto.status) commission.status = dto.status;
-    if (dto.commissionAmount) commission.commissionAmount = dto.commissionAmount;
-    if (dto.rate) commission.rate = dto.rate;
-    if (dto.paidDate !== undefined) commission.paidDate = dto.paidDate;
-    if (dto.status === 'Paid' && !commission.paidDate) {
-      commission.paidDate = new Date().toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' });
-    }
-
-    await commission.save();
-
-    // Also update deal commission status if applicable
-    const dealStatusMap: Record<string, 'Confirmed' | 'Paid' | 'Estimated'> = {
-      Confirmed: 'Confirmed',
-      Paid: 'Paid',
-      Processing: 'Estimated',
-    };
-    if (dto.status) {
-      await this.dealModel.findOneAndUpdate(
-        { id },
-        { commissionStatus: dealStatusMap[dto.status] || 'Estimated' },
-      );
-    }
-
+    await this.syncCommissionToDeal(commission);
     return commission;
   }
 
   async createDirectReferral(user: any, dto: any) {
     const dealId = `KRD-${Math.floor(1000 + Math.random() * 9000)}`;
-    const parsedAmount = Number(String(dto.amount || '250000').replace(/[^\d]/g, '')) || 250000;
-    const commissionValue = Math.round(parsedAmount * 0.01);
+    const parsedAmount = this.parseAmount(dto.amount?.trim() || '0');
+    const commissionValue = Math.round(parsedAmount) / 100;
     const created = await this.dealModel.create({
       id: dealId,
       name: dto.businessName,
       applicant: dto.contactName,
-      amount: `$${parsedAmount.toLocaleString()}`,
+      amount: this.formatAmount(parsedAmount),
       amountValue: parsedAmount,
       type: dto.facilityType || 'Asset & Equipment',
       status: 'Lead received',
       lastActivity: 'Just now',
-      commission: `$${commissionValue.toLocaleString()}`,
+      commission: this.formatAmount(commissionValue),
       commissionStatus: 'Estimated',
       code: user.role === 'partner' ? user.partnerCode : dto.referralCode || 'HAYES01',
       submittedDate: 'Today',
@@ -518,8 +574,10 @@ export class PortalService {
   async createApplication(dto: any) {
     // Also create deal record so partner & master see it in real-time
     const dealId = `KRD-${Math.floor(2000 + Math.random() * 7000)}`;
-    const parsedAmount = Number(String(dto.amount || '100000').replace(/[^\d]/g, '')) || 100000;
-    const commissionValue = Math.round(parsedAmount * 0.01);
+    // Amount bands use their lower bound until an exact financed value is entered.
+    const lowerBound = String(dto.amount).split(/\s*[-\u2013\u2014]\s*/)[0].replace(/\+$/, '');
+    const parsedAmount = this.parseAmount(lowerBound);
+    const commissionValue = Math.round(parsedAmount) / 100;
 
     const application = await this.applicationModel.create({
       tradingName: dto.tradingName,
@@ -544,7 +602,7 @@ export class PortalService {
       type: dto.purpose || 'Commercial Finance',
       status: 'Application submitted',
       lastActivity: 'Submitted online just now',
-      commission: `$${commissionValue.toLocaleString()}`,
+      commission: this.formatAmount(commissionValue),
       commissionStatus: 'Estimated',
       code: (dto.referralCode || 'SPUD').toUpperCase(),
       submittedDate: 'Today',
@@ -614,8 +672,12 @@ export class PortalService {
 
   async getCommissions(user: any) {
     if (user.role !== 'master') throw new ForbiddenException('Commission reporting is restricted to administrators');
-    const query = {};
-    const rows = await this.commissionModel.find(query).sort({ createdAt: -1 }).lean();
+    const existing = await this.commissionModel.find().select('dealId').lean();
+    const missing = await this.dealModel.find({
+      status: 'Settled', id: { $nin: existing.map((row) => row.dealId) },
+    }).lean();
+    for (const deal of missing) await this.ensureCommission(deal);
+    const rows = await this.commissionModel.find().sort({ createdAt: -1 }).lean();
     return rows.map((row) => ({
       id: row.dealId,
       dealName: row.dealName,

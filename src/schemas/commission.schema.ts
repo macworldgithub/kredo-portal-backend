@@ -26,7 +26,7 @@ export class Commission {
   @Prop({ type: String, default: null, nullable: true })
   paidDate?: string | null;
 
-  @Prop({ required: true })
+  @Prop({ required: true, unique: true })
   dealId: string;
 
   @Prop({ type: String, default: null, nullable: true })
