@@ -9,6 +9,7 @@ import { MailService } from './../src/auth/mail.service.js';
 import { getModelToken } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Commission } from './../src/schemas/commission.schema.js';
+import { Deal } from './../src/schemas/deal.schema.js';
 
 describe('Kredo portal backend (e2e)', () => {
   let app: INestApplication<App>;
@@ -354,7 +355,7 @@ describe('Kredo portal backend (e2e)', () => {
     const after = await request(app.getHttpServer()).get('/api/portal/master/overview')
       .set('Authorization', authorization).expect(200);
     const toNumber = (value: string) => Number(value.replace(/[$,]/g, ''));
-    expect(toNumber(before.body.stats.commissionAccrued) - toNumber(after.body.stats.commissionAccrued)).toBeCloseTo(422.75);
+    expect(toNumber(before.body.stats.commissionAccrued) - toNumber(after.body.stats.commissionAccrued)).toBeCloseTo(1200);
     // Retrying settlement and changing facility details must preserve a paid adjustment.
     await request(app.getHttpServer()).patch(`/api/portal/deals/${id}/status`)
       .set('Authorization', authorization).send({ status: 'Settled' }).expect(200);
@@ -374,6 +375,39 @@ describe('Kredo portal backend (e2e)', () => {
     expect(repaired.body.find((row: any) => row.dealId === id)).toMatchObject({
       commissionAmount: '$777.25', status: 'Paid', settledAmount: '$90,000',
     });
+  });
+
+  it('accrues only confirmed unpaid commissions on settled deals', async () => {
+    const authorization = `Bearer ${adminToken}`;
+    const before = await request(app.getHttpServer()).get('/api/portal/master/overview')
+      .set('Authorization', authorization).expect(200);
+    const cases: Array<Pick<Deal, 'status' | 'commissionStatus' | 'commission'>> = [
+      { status: 'Settled', commissionStatus: 'Confirmed', commission: '$1,234.56' },
+      { status: 'Settled', commissionStatus: 'Paid', commission: '$999' },
+      { status: 'Settled', commissionStatus: 'Estimated', commission: '$888' },
+      { status: 'Closed Lost', commissionStatus: 'Confirmed', commission: '$777' },
+      { status: 'Declined', commissionStatus: 'Confirmed', commission: '$666' },
+      { status: 'Declined / withdrawn', commissionStatus: 'Confirmed', commission: '$555' },
+      { status: 'In assessment', commissionStatus: 'Estimated', commission: '$444' },
+      { status: 'Approved', commissionStatus: 'Confirmed', commission: '$333' },
+    ];
+    const deals = app.get<Model<Deal>>(getModelToken(Deal.name));
+    const ids = cases.map((_, index) => `ACCRUAL-TEST-${index}`);
+    try {
+      await deals.insertMany(cases.map((item, index) => ({
+        ...item, id: ids[index], name: 'Accrual Regression Test', applicant: 'Test Applicant',
+        amount: '$100,000', amountValue: 100000, type: 'Working Capital',
+        lastActivity: 'Test', code: 'HAYES01', submittedDate: 'Today',
+      })));
+      const after = await request(app.getHttpServer()).get('/api/portal/master/overview')
+        .set('Authorization', authorization).expect(200);
+      const toNumber = (value: string) => Number(value.replace(/[$,]/g, ''));
+      expect(after.body.stats.commissionAccrued.startsWith('$')).toBe(true);
+      expect(toNumber(after.body.stats.commissionAccrued) - toNumber(before.body.stats.commissionAccrued))
+        .toBeCloseTo(1234.56);
+    } finally {
+      await deals.deleteMany({ id: { $in: ids } });
+    }
   });
 
   it('uses the lower bound of an application amount band', async () => {

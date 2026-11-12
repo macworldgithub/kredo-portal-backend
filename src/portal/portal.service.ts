@@ -734,7 +734,9 @@ export class PortalService {
     const totalAmountFinanced = settledDealsList.reduce((sum, deal) => sum + (deal.financedAmount ?? (deal.amountValue || this.toNumber(deal.amount))), 0);
     const totalAccountsFinanced = settledDealsList.length;
 
-    const commissionTotal = deals.reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
+    const commissionTotal = settledDealsList
+      .filter((deal) => deal.commissionStatus === 'Confirmed')
+      .reduce((sum, deal) => sum + this.toNumber(deal.commission), 0);
 
     const partnerPerformance = partners
       .map((partner) => {
@@ -763,7 +765,7 @@ export class PortalService {
         inFlightDeals: inFlight,
         settledThisMonth: settledMonth,
         closedLostDeals: closedLostCount,
-        commissionAccrued: `${commissionTotal.toLocaleString()}`,
+        commissionAccrued: this.formatAmount(commissionTotal),
         totalAmountFinanced: `$${totalAmountFinanced.toLocaleString()}`,
         totalAccountsFinanced,
       },
