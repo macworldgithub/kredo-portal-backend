@@ -353,7 +353,7 @@ export class PortalService {
       throw new NotFoundException('Deal not found');
     }
 
-    if (user.role !== 'master' && (dto.lender !== undefined || dto.financedAmount !== undefined)) {
+    if (user.role !== 'master' && dto.financedAmount !== undefined) {
       throw new ForbiddenException('Finance fields are restricted to administrators');
     }
     const changes: string[] = [];
@@ -361,9 +361,10 @@ export class PortalService {
       changes.push(`Amount financed: ${dto.financedAmount}`);
       deal.financedAmount = dto.financedAmount;
     }
-    if (dto.lender !== undefined && dto.lender !== deal.lender) {
-      changes.push(`Lender: "${deal.lender || 'None'}" -> "${dto.lender}"`);
-      deal.lender = dto.lender;
+    const lender = dto.lender?.trim() || '';
+    if (dto.lender !== undefined && lender !== deal.lender) {
+      changes.push(`Lender: "${deal.lender || 'None'}" -> "${lender}"`);
+      deal.lender = lender;
     }
     if (dto.name && dto.name !== deal.name) {
       changes.push(`Business: "${deal.name}" -> "${dto.name}"`);
@@ -525,6 +526,10 @@ export class PortalService {
 
   async createDirectReferral(user: any, dto: any) {
     const dealId = `KRD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const lender = dto.lender?.trim() || '';
+    const lenderHtml = lender.replace(/[&<>"']/g, (character: string) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]!);
     const comments = dto.comments?.trim() || '';
     const commentsHtml = comments.replace(/[&<>"']/g, (character: string) => ({
       '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
@@ -538,6 +543,7 @@ export class PortalService {
       amount: this.formatAmount(parsedAmount),
       amountValue: parsedAmount,
       type: dto.facilityType || 'Asset & Equipment',
+      lender: lender || null,
       status: 'Lead received',
       lastActivity: 'Just now',
       commission: this.formatAmount(commissionValue),
@@ -574,10 +580,11 @@ export class PortalService {
       <p><strong>Phone:</strong> ${dto.phone || 'N/A'}</p>
       <p><strong>Requested Amount:</strong> $${parsedAmount.toLocaleString()}</p>
       <p><strong>Facility Type:</strong> ${dto.facilityType || 'Asset & Equipment'}</p>
+      <p><strong>Lender / Funder:</strong> ${lenderHtml || 'Not assigned'}</p>
       ${comments ? `<p><strong>About the client:</strong><br>${commentsHtml}</p>` : ''}
       <p><strong>Partner Code:</strong> ${user.role === 'partner' ? user.partnerCode : dto.referralCode || 'HAYES01'}</p>
       <p><strong>Referred By:</strong> ${user.name || 'Partner'}</p>`,
-      `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}${comments ? `\nAbout the client: ${comments}` : ''}`,
+      `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}\nLender / Funder: ${lender || 'Not assigned'}${comments ? `\nAbout the client: ${comments}` : ''}`,
     );
 
     return this.mapDeal(created, user);

@@ -16,6 +16,7 @@ describe('Kredo portal backend (e2e)', () => {
   let adminToken: string;
   let mongoServer: MongoMemoryServer;
   const sendMailTo = vi.fn().mockResolvedValue(undefined);
+  const sendFormNotification = vi.fn().mockResolvedValue(undefined);
   let resetCode: string | null = null;
 
   beforeAll(async () => {
@@ -34,7 +35,7 @@ describe('Kredo portal backend (e2e)', () => {
       .overrideProvider(MailService)
       .useValue({
         sendMailTo,
-        sendFormNotification: async () => undefined,
+        sendFormNotification,
         sendWelcomeEmail: async () => undefined,
         assertConfigured: () => undefined,
         sendPasswordResetCode: async (_email: string, code: string) => {
@@ -250,7 +251,7 @@ describe('Kredo portal backend (e2e)', () => {
     expect(referral.body.commission).toBeUndefined();
 
     await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
-      .set('Authorization', partnerAuth).send({ lender: 'Shift' }).expect(403);
+      .set('Authorization', partnerAuth).send({ lender: 'Shift' }).expect(200);
     const financed = await request(app.getHttpServer()).patch(`/api/portal/deals/${id}`)
       .set('Authorization', adminAuth).send({ lender: 'New Funder', financedAmount: 95000.50 }).expect(200);
     expect(financed.body.lender).toBe('New Funder');
@@ -306,9 +307,67 @@ describe('Kredo portal backend (e2e)', () => {
     expect(dashboard.body.stats.totalReferralValue.startsWith('$')).toBe(true);
     const listing = await request(app.getHttpServer()).get('/api/portal/deals').set('Authorization', partnerAuth).expect(200);
     expect(dashboard.body.deals).toHaveLength(listing.body.length);
-    expect(listing.body.every((deal: any) => deal.commission === undefined && deal.diaryNotes.length === 0)).toBe(true);
+    expect(listing.body.every((deal: any) => deal.commission === undefined && deal.diaryNotes.every((note: any) => !note.isInternal))).toBe(true);
     await request(app.getHttpServer()).get('/api/portal/commissions').set('Authorization', partnerAuth).expect(403);
     await request(app.getHttpServer()).patch('/api/portal/deals/KRD-2842/status-seen').set('Authorization', partnerAuth).expect(404);
+  });
+
+  it('lets partners assign, change and clear lenders only on their own leads', async () => {
+    const login = await request(app.getHttpServer()).post('/api/auth/login')
+      .send({ email: 'partner@kredo.local', password: 'ChangeMe123!' }).expect(200);
+    const partnerAuth = `Bearer ${login.body.accessToken}`;
+    const adminAuth = `Bearer ${adminToken}`;
+    const referral = {
+      businessName: 'Partner Lender Test', contactName: 'John',
+      email: 'john@example.test', phone: '0400000000', amount: '$120,000',
+    };
+    const lender = 'Custom <Funder> & Co';
+    sendFormNotification.mockClear();
+    const created = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+      .set('Authorization', partnerAuth)
+      .send({ ...referral, lender: `  ${lender}  `, referralCode: 'OTHER01' }).expect(201);
+    expect(created.body.lender).toBe(lender);
+    expect(created.body.code).toBe('HAYES01');
+    expect(sendFormNotification).toHaveBeenCalledWith(
+      expect.any(String), expect.stringContaining('Custom &lt;Funder&gt; &amp; Co'),
+      expect.stringContaining(`Lender / Funder: ${lender}`),
+    );
+    const path = `/api/portal/deals/${created.body.id}`;
+    const saved = await request(app.getHttpServer()).get(path).set('Authorization', partnerAuth).expect(200);
+    expect(saved.body.lender).toBe(lender);
+    for (const nextLender of ['Shift', 'Another Custom Funder', '']) {
+      const updated = await request(app.getHttpServer()).patch(path)
+        .set('Authorization', partnerAuth).send({ lender: nextLender }).expect(200);
+      expect(updated.body.lender).toBe(nextLender);
+      const persisted = await request(app.getHttpServer()).get(path)
+        .set('Authorization', adminAuth).expect(200);
+      expect(persisted.body.lender).toBe(nextLender);
+      expect(persisted.body.diaryNotes[0].content).toContain('Lender:');
+    }
+    await request(app.getHttpServer()).patch(path).set('Authorization', partnerAuth)
+      .send({ lender: 'Lumi' }).expect(200);
+    const unchanged = await request(app.getHttpServer()).patch(path).set('Authorization', partnerAuth)
+      .send({ name: 'Updated Business Name' }).expect(200);
+    expect(unchanged.body.lender).toBe('Lumi');
+    await request(app.getHttpServer()).patch(path).set('Authorization', partnerAuth)
+      .send({ lender: 'Shift', financedAmount: 50000 }).expect(403);
+    const protectedDeal = await request(app.getHttpServer()).get(path).set('Authorization', partnerAuth).expect(200);
+    expect(protectedDeal.body.lender).toBe('Lumi');
+    await request(app.getHttpServer()).post('/api/portal/deals/direct').set('Authorization', partnerAuth)
+      .send({ ...referral, lender: 123 }).expect(400);
+    await request(app.getHttpServer()).patch(path).set('Authorization', partnerAuth)
+      .send({ lender: { name: 'Shift' } }).expect(400);
+
+    const foreign = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+      .set('Authorization', adminAuth).send({ ...referral, referralCode: 'OTHER01', lender: 'Banjo' }).expect(201);
+    await request(app.getHttpServer()).patch(`/api/portal/deals/${foreign.body.id}`)
+      .set('Authorization', partnerAuth).send({ lender: 'Shift' }).expect(404);
+    const foreignSaved = await request(app.getHttpServer()).get(`/api/portal/deals/${foreign.body.id}`)
+      .set('Authorization', adminAuth).expect(200);
+    expect(foreignSaved.body.lender).toBe('Banjo');
+    const unassigned = await request(app.getHttpServer()).post('/api/portal/deals/direct')
+      .set('Authorization', partnerAuth).send(referral).expect(201);
+    expect(unassigned.body.lender).toBeUndefined();
   });
 
   it('preserves zero and decimal referral amounts and rejects malformed amounts', async () => {

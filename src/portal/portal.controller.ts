@@ -51,6 +51,10 @@ class CreateDirectReferralDto {
 
   @IsOptional()
   @IsString()
+  lender?: string;
+
+  @IsOptional()
+  @IsString()
   comments?: string;
 
   @IsOptional()
