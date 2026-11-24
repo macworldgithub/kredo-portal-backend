@@ -211,6 +211,7 @@ describe('Kredo portal backend (e2e)', () => {
       .send({
         businessName: 'Moss & Co Finance',
         contactName: 'Ari Moss',
+        comments: '  Established client seeking equipment finance.\nNeeds funding this month.  ',
         email: 'ari@mossco.example',
         phone: '+61 400 111 222',
         amount: '$275000',
@@ -220,6 +221,10 @@ describe('Kredo portal backend (e2e)', () => {
       .expect(201);
 
     expect(createRes.body.id).toMatch(/^KRD-/);
+    expect(createRes.body.diaryNotes).toContainEqual(expect.objectContaining({
+      content: 'Established client seeking equipment finance.\nNeeds funding this month.',
+      isInternal: false,
+    }));
     const dealId = createRes.body.id;
 
     const patchRes = await request(app.getHttpServer())
@@ -229,6 +234,9 @@ describe('Kredo portal backend (e2e)', () => {
       .expect(200);
 
     expect(patchRes.body.status).toBe('Approved');
+    expect(patchRes.body.diaryNotes).toContainEqual(expect.objectContaining({
+      content: 'Established client seeking equipment finance.\nNeeds funding this month.',
+    }));
   });
 
   it('persists finance, authors, reminders and private status updates', async () => {

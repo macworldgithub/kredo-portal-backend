@@ -525,6 +525,10 @@ export class PortalService {
 
   async createDirectReferral(user: any, dto: any) {
     const dealId = `KRD-${Math.floor(1000 + Math.random() * 9000)}`;
+    const comments = dto.comments?.trim() || '';
+    const commentsHtml = comments.replace(/[&<>"']/g, (character: string) => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
+    })[character]!).replace(/\r?\n/g, '<br>');
     const parsedAmount = this.parseAmount(dto.amount?.trim() || '0');
     const commissionValue = Math.round(parsedAmount) / 100;
     const created = await this.dealModel.create({
@@ -542,6 +546,13 @@ export class PortalService {
       submittedDate: 'Today',
       source: 'direct',
       diaryNotes: [
+        ...(comments ? [{
+          id: `NOTE-${randomUUID()}`,
+          author: user.name || 'Partner',
+          content: comments,
+          isInternal: false,
+          createdAt: 'Today',
+        }] : []),
         {
           id: `NOTE-${randomUUID()}`,
           author: user.name || 'Partner',
@@ -563,9 +574,10 @@ export class PortalService {
       <p><strong>Phone:</strong> ${dto.phone || 'N/A'}</p>
       <p><strong>Requested Amount:</strong> $${parsedAmount.toLocaleString()}</p>
       <p><strong>Facility Type:</strong> ${dto.facilityType || 'Asset & Equipment'}</p>
+      ${comments ? `<p><strong>About the client:</strong><br>${commentsHtml}</p>` : ''}
       <p><strong>Partner Code:</strong> ${user.role === 'partner' ? user.partnerCode : dto.referralCode || 'HAYES01'}</p>
       <p><strong>Referred By:</strong> ${user.name || 'Partner'}</p>`,
-      `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}`,
+      `New Direct Referral Lodged\nDeal ID: ${dealId}\nBusiness: ${dto.businessName}\nContact: ${dto.contactName}\nPhone: ${dto.phone}\nEmail: ${dto.email}\nAmount: $${parsedAmount.toLocaleString()}\nFacility: ${dto.facilityType}${comments ? `\nAbout the client: ${comments}` : ''}`,
     );
 
     return this.mapDeal(created, user);

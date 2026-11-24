@@ -51,6 +51,10 @@ class CreateDirectReferralDto {
 
   @IsOptional()
   @IsString()
+  comments?: string;
+
+  @IsOptional()
+  @IsString()
   referralCode?: string;
 }
 
